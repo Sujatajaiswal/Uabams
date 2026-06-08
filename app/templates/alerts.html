@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Alerts</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+<main class="shell">
+    <header class="page-header">
+        <div>
+            <p class="eyebrow">Monitoring</p>
+            <h1>Alerts</h1>
+        </div>
+        <a class="nav-link" href="/dashboard">Dashboard</a>
+    </header>
+
+    <section class="panel">
+        <h2>Generated Alerts</h2>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Train</th>
+                        <th>Route</th>
+                        <th>Type</th>
+                        <th>Measured</th>
+                        <th>Threshold</th>
+                        <th>Speed</th>
+                        <th>KM</th>
+                        <th>Meter</th>
+                        <th>Location</th>
+                    </tr>
+                </thead>
+                <tbody id="alerts-body"></tbody>
+            </table>
+        </div>
+    </section>
+</main>
+
+<script>
+async function loadAlerts() {
+    const response = await fetch("/alerts");
+    const rows = await response.json();
+    document.getElementById("alerts-body").innerHTML = rows.map(row => `
+        <tr>
+            <td>${row.train_no}</td>
+            <td>${row.route_name || ""}</td>
+            <td><span class="badge">${row.alert_type}</span></td>
+            <td>${row.measured_value}g</td>
+            <td>${row.threshold_value}g</td>
+            <td>${Number(row.speed_kmph || 0).toFixed(2)} kmph</td>
+            <td>${row.km_marker ?? ""}</td>
+            <td>${row.meter ?? ""}</td>
+            <td>${row.latitude}, ${row.longitude}</td>
+        </tr>
+    `).join("");
+}
+
+loadAlerts();
+</script>
+
+</body>
+</html>

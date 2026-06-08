@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CSV Reports</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+<main class="shell">
+    <header class="page-header">
+        <div>
+            <p class="eyebrow">Cloud Storage</p>
+            <h1>CSV Reports</h1>
+        </div>
+        <a class="nav-link" href="/dashboard">Dashboard</a>
+    </header>
+
+    <section class="panel">
+        <h2>Cloud Data CSV Downloads</h2>
+        <p class="helper-text">
+            These CSV files are generated from the current PostgreSQL cloud database records.
+        </p>
+        <div id="report-list" class="report-list"></div>
+        <p id="message" class="message"></p>
+    </section>
+
+    <section class="panel">
+        <h2 id="preview-title">CSV Preview</h2>
+        <div class="table-wrap">
+            <table id="preview-table">
+                <thead></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </section>
+</main>
+
+<script>
+async function loadReports() {
+    const response = await fetch("/csv/reports");
+    const reports = await response.json();
+    const reportList = document.getElementById("report-list");
+
+    reportList.innerHTML = reports.map(report => `
+        <article class="report-row">
+            <div>
+                <strong>${report.title}</strong>
+                <small>${report.download_url}</small>
+            </div>
+            <div class="report-actions">
+                <button type="button" onclick="previewReport('${report.name}')">Preview</button>
+                <a class="nav-link" href="${report.download_url}">Download CSV</a>
+            </div>
+        </article>
+    `).join("");
+
+    if (reports.length) {
+        previewReport(reports[0].name);
+    }
+}
+
+async function previewReport(name) {
+    const response = await fetch(`/csv/preview/${name}?limit=20`);
+    const report = await response.json();
+    const table = document.getElementById("preview-table");
+    const message = document.getElementById("message");
+
+    document.getElementById("preview-title").textContent = `${report.title} Preview`;
+
+    if (!response.ok) {
+        message.textContent = report.detail || "Unable to load CSV preview.";
+        return;
+    }
+
+    if (!report.rows.length) {
+        table.querySelector("thead").innerHTML = "";
+        table.querySelector("tbody").innerHTML = "";
+        message.textContent = "No records found for this CSV report yet.";
+        return;
+    }
+
+    const columns = Object.keys(report.rows[0]);
+    table.querySelector("thead").innerHTML = `
+        <tr>${columns.map(column => `<th>${column.replaceAll("_", " ")}</th>`).join("")}</tr>
+    `;
+    table.querySelector("tbody").innerHTML = report.rows.map(row => `
+        <tr>${columns.map(column => `<td>${row[column] ?? ""}</td>`).join("")}</tr>
+    `).join("");
+    message.textContent = `Showing latest ${report.rows.length} records. Use Download CSV for the full export.`;
+}
+
+loadReports();
+</script>
+
+</body>
+</html>

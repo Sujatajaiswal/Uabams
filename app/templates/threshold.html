@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Threshold Management</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+<main class="shell">
+    <header class="page-header">
+        <div>
+            <p class="eyebrow">Task 2</p>
+            <h1>Threshold Management</h1>
+        </div>
+        <a class="nav-link" href="/dashboard">Dashboard</a>
+    </header>
+
+    <section class="panel">
+        <form id="threshold-form" class="form-grid">
+            <label>Route Name<input name="route_name" value="DEFAULT" required></label>
+            <label>Vertical Threshold (g)<input name="vertical_threshold" type="number" min="0" max="100" step="0.1" value="50" required></label>
+            <label>Lateral Threshold (g)<input name="lateral_threshold" type="number" min="0" max="100" step="0.1" value="80" required></label>
+            <button type="submit">Save Threshold</button>
+        </form>
+        <p id="message" class="message"></p>
+    </section>
+
+    <section class="panel">
+        <h2>Active Threshold</h2>
+        <div id="threshold-current" class="metric-row"></div>
+    </section>
+</main>
+
+<script>
+async function loadThreshold() {
+    const route = document.querySelector("[name='route_name']").value || "DEFAULT";
+    const response = await fetch(`/threshold?route_name=${encodeURIComponent(route)}`);
+    const row = await response.json();
+    document.getElementById("threshold-current").innerHTML = row.vertical_threshold === undefined
+        ? "<span>No threshold configured</span>"
+        : `<span>Route: <strong>${row.route_name}</strong></span><span>Vertical: <strong>${Number(row.vertical_threshold).toFixed(1)}g</strong></span><span>Lateral: <strong>${Number(row.lateral_threshold).toFixed(1)}g</strong></span>`;
+}
+
+document.getElementById("threshold-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target).entries());
+    data.vertical_threshold = Number(data.vertical_threshold);
+    data.lateral_threshold = Number(data.lateral_threshold);
+
+    const response = await fetch("/threshold", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(data)
+    });
+    const result = await response.json();
+    document.getElementById("message").textContent = response.ok ? result.message : result.detail;
+    loadThreshold();
+});
+
+loadThreshold();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>UABAMS Public Cloud Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+<main class="shell">
+    <header class="page-header">
+        <div>
+            <p class="eyebrow">Render Cloud</p>
+            <h1>UABAMS Public Cloud Dashboard</h1>
+        </div>
+        <div class="header-actions">
+            <a class="nav-link" href="/dashboard">Operator Dashboard</a>
+            <a class="nav-link" href="/docs">API Docs</a>
+        </div>
+    </header>
+
+    <section class="panel">
+        <div class="section-title-row">
+            <div>
+                <h2>Cloud Status</h2>
+                <p class="helper-text">Public view for checking API, database, CSV reports, and RailMAN handoff readiness.</p>
+            </div>
+            <button type="button" onclick="loadCloudStatus()">Refresh Status</button>
+        </div>
+        <div id="cloud-status" class="status-grid"></div>
+    </section>
+
+    <section class="panel">
+        <div class="section-title-row">
+            <div>
+                <h2>CSV Downloads</h2>
+                <p class="helper-text">Each CSV is generated live from the Render PostgreSQL cloud database.</p>
+            </div>
+            <a class="nav-link" href="/csv-page">Open CSV Page</a>
+        </div>
+        <div id="csv-list" class="report-list"></div>
+    </section>
+
+    <section class="panel">
+        <div class="section-title-row">
+            <div>
+                <h2>Latest Gateway Data</h2>
+                <p class="helper-text">Stored gateway records from cloud database.</p>
+            </div>
+            <a class="nav-link" href="/csv/download/gateway-data">Download Gateway CSV</a>
+        </div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Index</th>
+                        <th>Train</th>
+                        <th>Route</th>
+                        <th>KM</th>
+                        <th>Meter</th>
+                        <th>Vertical</th>
+                        <th>Lateral</th>
+                        <th>Speed</th>
+                        <th>Corrected Speed</th>
+                        <th>Location</th>
+                        <th>Created At</th>
+                    </tr>
+                </thead>
+                <tbody id="gateway-body"></tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="panel">
+        <div class="section-title-row">
+            <div>
+                <h2>Latest Alerts</h2>
+                <p class="helper-text">Alerts are generated only when corrected speed is above 80 kmph and acceleration crosses route threshold.</p>
+            </div>
+            <a class="nav-link" href="/csv/download/alerts">Download Alerts CSV</a>
+        </div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Index</th>
+                        <th>Train</th>
+                        <th>Route</th>
+                        <th>Type</th>
+                        <th>Measured</th>
+                        <th>Threshold</th>
+                        <th>Speed</th>
+                        <th>KM</th>
+                        <th>Meter</th>
+                        <th>Created At</th>
+                    </tr>
+                </thead>
+                <tbody id="alerts-body"></tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="panel">
+        <div class="section-title-row">
+            <div>
+                <h2>RailMAN Handoff</h2>
+                <p class="helper-text">Structured JSON export for later RailMAN/railway cloud integration.</p>
+            </div>
+            <a class="nav-link" href="/railman/export" target="_blank">Open RailMAN Export</a>
+        </div>
+        <pre id="railman-preview" class="json-preview">Loading RailMAN preview...</pre>
+    </section>
+</main>
+
+<script>
+function valueOrDash(value) {
+    return value === null || value === undefined || value === "" ? "-" : value;
+}
+
+function formatNumber(value, digits = 2) {
+    if (value === null || value === undefined || value === "") {
+        return "-";
+    }
+    return Number(value).toFixed(digits);
+}
+
+async function loadCloudStatus() {
+    const response = await fetch("/cloud/status");
+    const status = await response.json();
+    const statusGrid = document.getElementById("cloud-status");
+
+    const cards = [
+        ["API Status", status.api_status],
+        ["Database Status", status.database_status],
+        ["Cloud Database", status.cloud_database],
+        ["Database Host", status.database_host],
+        ["Schema Ready", status.schema_ready ? "Yes" : "No"],
+        ["RailMAN Ready", status.railman_ready ? "Yes" : "No"],
+        ["Gateway Endpoint", status.gateway_ingest_endpoint],
+        ["RailMAN Export", status.railman_export_endpoint]
+    ];
+
+    statusGrid.innerHTML = cards.map(([label, value]) => `
+        <div class="status-item">
+            <span>${label}</span>
+            <strong>${valueOrDash(value)}</strong>
+        </div>
+    `).join("");
+}
+
+async function loadCsvReports() {
+    const response = await fetch("/csv/reports");
+    const reports = await response.json();
+    document.getElementById("csv-list").innerHTML = reports.map(report => `
+        <article class="report-row">
+            <div>
+                <strong>${report.title}</strong>
+                <small>${report.download_url}</small>
+            </div>
+            <div class="report-actions">
+                <a class="nav-link" href="${report.preview_url}" target="_blank">View JSON</a>
+                <a class="nav-link" href="${report.download_url}">Download CSV</a>
+            </div>
+        </article>
+    `).join("");
+}
+
+async function loadGatewayData() {
+    const response = await fetch("/api/data");
+    const rows = await response.json();
+    document.getElementById("gateway-body").innerHTML = rows.slice(0, 10).map(row => `
+        <tr>
+            <td>${valueOrDash(row.record_index)}</td>
+            <td>${row.train_no}</td>
+            <td>${row.route_name || "DEFAULT"}</td>
+            <td>${valueOrDash(row.km_marker)}</td>
+            <td>${valueOrDash(row.meter)}</td>
+            <td>${formatNumber(row.vertical_g, 2)}g</td>
+            <td>${formatNumber(row.lateral_g, 2)}g</td>
+            <td>${formatNumber(row.speed_kmph, 2)} kmph</td>
+            <td>${formatNumber(row.corrected_speed_kmph, 2)} kmph</td>
+            <td>${formatNumber(row.latitude, 6)}, ${formatNumber(row.longitude, 6)}</td>
+            <td>${valueOrDash(row.created_at)}</td>
+        </tr>
+    `).join("");
+}
+
+async function loadAlerts() {
+    const response = await fetch("/alerts");
+    const rows = await response.json();
+    document.getElementById("alerts-body").innerHTML = rows.slice(0, 10).map(row => `
+        <tr>
+            <td>${valueOrDash(row.record_index)}</td>
+            <td>${row.train_no}</td>
+            <td>${row.route_name || "DEFAULT"}</td>
+            <td><span class="badge">${row.alert_type}</span></td>
+            <td>${formatNumber(row.measured_value, 2)}g</td>
+            <td>${formatNumber(row.threshold_value, 2)}g</td>
+            <td>${formatNumber(row.speed_kmph, 2)} kmph</td>
+            <td>${valueOrDash(row.km_marker)}</td>
+            <td>${valueOrDash(row.meter)}</td>
+            <td>${valueOrDash(row.created_at)}</td>
+        </tr>
+    `).join("");
+}
+
+async function loadRailmanPreview() {
+    const response = await fetch("/railman/export?limit=3");
+    const payload = await response.json();
+    document.getElementById("railman-preview").textContent = JSON.stringify(payload, null, 2);
+}
+
+loadCloudStatus();
+loadCsvReports();
+loadGatewayData();
+loadAlerts();
+loadRailmanPreview();
+</script>
+</body>
+</html>

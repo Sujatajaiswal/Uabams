@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Wheel Calibration</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+<main class="shell">
+    <header class="page-header">
+        <div>
+            <p class="eyebrow">Task 1</p>
+            <h1>Axle/Wheel Calibration</h1>
+        </div>
+        <a class="nav-link" href="/dashboard">Dashboard</a>
+    </header>
+
+    <section class="panel">
+        <form id="wheel-form" class="form-grid">
+            <label>Train No<input name="train_no" value="TRAIN001" required></label>
+            <label>Axle No<input name="axle_no" value="AXLE-1" required></label>
+            <label>Wheel Position<input name="wheel_position" value="LEFT" required></label>
+            <label>New Diameter (mm)<input name="new_wheel_diameter_mm" type="number" step="0.01" value="920" required></label>
+            <label>Current Diameter (mm)<input name="current_wheel_diameter_mm" type="number" step="0.01" value="890" required></label>
+            <label>Encoder Pulses/Rev<input name="encoder_pulses_per_rev" type="number" value="1024" required></label>
+            <button type="submit">Save Calibration</button>
+        </form>
+        <p id="message" class="message"></p>
+    </section>
+
+    <section class="panel">
+        <h2>Latest Calibration Records</h2>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Train</th>
+                        <th>Axle</th>
+                        <th>Wheel</th>
+                        <th>Current mm</th>
+                        <th>Wear mm</th>
+                        <th>Correction</th>
+                    </tr>
+                </thead>
+                <tbody id="wheel-body"></tbody>
+            </table>
+        </div>
+    </section>
+</main>
+
+<script>
+async function loadWheelCalibration() {
+    const response = await fetch("/wheel-calibration");
+    const rows = await response.json();
+    document.getElementById("wheel-body").innerHTML = rows.map(row => `
+        <tr>
+            <td>${row.train_no}</td>
+            <td>${row.axle_no || ""}</td>
+            <td>${row.wheel_position || ""}</td>
+            <td>${Number(row.current_wheel_diameter_mm || row.wheel_diameter_mm || 0).toFixed(2)}</td>
+            <td>${Number(row.wheel_wear_mm || 0).toFixed(2)}</td>
+            <td>${Number(row.correction_factor || 1).toFixed(4)}</td>
+        </tr>
+    `).join("");
+}
+
+document.getElementById("wheel-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target).entries());
+    data.new_wheel_diameter_mm = Number(data.new_wheel_diameter_mm);
+    data.current_wheel_diameter_mm = Number(data.current_wheel_diameter_mm);
+    data.encoder_pulses_per_rev = Number(data.encoder_pulses_per_rev);
+
+    const response = await fetch("/wheel-calibration", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(data)
+    });
+    const result = await response.json();
+    document.getElementById("message").textContent = response.ok ? result.message : result.detail;
+    loadWheelCalibration();
+});
+
+loadWheelCalibration();
+</script>
+
+</body>
+</html>
