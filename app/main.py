@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from app.database import engine
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="UABAMS Cloud", docs_url=None)
@@ -435,7 +436,10 @@ def init_db():
 
 @app.on_event("startup")
 def startup():
-    init_db()
+    try:
+        init_db()
+    except SQLAlchemyError as exc:
+        print(f"Database startup check failed: {exc}")
 
 
 # =====================================
@@ -449,7 +453,6 @@ def home():
 
 @app.get("/cloud/status")
 def cloud_status():
-    init_db()
     required_tables = [
         "wheel_calibration",
         "thresholds",
@@ -457,19 +460,35 @@ def cloud_status():
         "alerts",
     ]
 
-    with engine.connect() as conn:
-        database_time = conn.execute(text("SELECT NOW()")).scalar()
-        table_rows = conn.execute(
-            text("""
-                SELECT table_name
-                FROM information_schema.tables
-                WHERE table_schema = 'public'
-                  AND table_name = ANY(:tables)
-                ORDER BY table_name
-            """),
-            {"tables": required_tables},
-        ).fetchall()
-        available_tables = [row.table_name for row in table_rows]
+    try:
+        init_db()
+        with engine.connect() as conn:
+            database_time = conn.execute(text("SELECT NOW()")).scalar()
+            table_rows = conn.execute(
+                text("""
+                    SELECT table_name
+                    FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                      AND table_name = ANY(:tables)
+                    ORDER BY table_name
+                """),
+                {"tables": required_tables},
+            ).fetchall()
+            available_tables = [row.table_name for row in table_rows]
+    except SQLAlchemyError as exc:
+        return {
+            "api_status": "running",
+            "database_status": "disconnected",
+            "cloud_database": "Render PostgreSQL",
+            "database_host": database_host(),
+            "database_error": str(exc.orig) if getattr(exc, "orig", None) else str(exc),
+            "required_tables": required_tables,
+            "available_tables": [],
+            "schema_ready": False,
+            "railman_ready": False,
+            "railman_export_endpoint": "/railman/export",
+            "gateway_ingest_endpoint": "/api/data",
+        }
 
     return {
         "api_status": "running",
@@ -1167,7 +1186,6 @@ def railman_export(limit: int = 100):
 
 @app.get("/csv/reports")
 def csv_reports():
-    init_db()
     return [
         {
             "name": name,
@@ -1181,22 +1199,35 @@ def csv_reports():
 
 @app.get("/csv/preview/{report_name}")
 def csv_preview(report_name: str, limit: int = 20):
-    init_db()
     report = CSV_REPORTS.get(report_name)
     if not report:
         raise HTTPException(status_code=404, detail="CSV report not found")
+    try:
+        init_db()
+        rows = get_csv_rows(report_name, limit)
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Database unavailable. Check Render DATABASE_URL. {exc.orig if getattr(exc, 'orig', None) else exc}",
+        ) from exc
     return {
         "name": report_name,
         "title": report["title"],
         "download_url": f"/csv/download/{report_name}",
-        "rows": get_csv_rows(report_name, limit),
+        "rows": rows,
     }
 
 
 @app.get("/csv/download/{report_name}")
 def csv_download(report_name: str, limit: int = 5000):
-    init_db()
-    return build_csv_response(report_name, limit)
+    try:
+        init_db()
+        return build_csv_response(report_name, limit)
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Database unavailable. Check Render DATABASE_URL. {exc.orig if getattr(exc, 'orig', None) else exc}",
+        ) from exc
 
 
 # =====================================

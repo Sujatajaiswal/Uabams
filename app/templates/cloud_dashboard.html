@@ -136,7 +136,8 @@ async function loadCloudStatus() {
         ["Schema Ready", status.schema_ready ? "Yes" : "No"],
         ["RailMAN Ready", status.railman_ready ? "Yes" : "No"],
         ["Gateway Endpoint", status.gateway_ingest_endpoint],
-        ["RailMAN Export", status.railman_export_endpoint]
+        ["RailMAN Export", status.railman_export_endpoint],
+        ["Database Error", status.database_error || ""]
     ];
 
     statusGrid.innerHTML = cards.map(([label, value]) => `
@@ -165,9 +166,19 @@ async function loadCsvReports() {
 }
 
 async function loadGatewayData() {
-    const response = await fetch("/api/data");
-    const rows = await response.json();
-    document.getElementById("gateway-body").innerHTML = rows.slice(0, 10).map(row => `
+    const body = document.getElementById("gateway-body");
+    let rows = [];
+    try {
+        const response = await fetch("/api/data");
+        if (!response.ok) {
+            throw new Error("Gateway data unavailable");
+        }
+        rows = await response.json();
+    } catch (error) {
+        body.innerHTML = `<tr><td colspan="11">Database unavailable. Check Render DATABASE_URL.</td></tr>`;
+        return;
+    }
+    body.innerHTML = rows.slice(0, 10).map(row => `
         <tr>
             <td>${valueOrDash(row.record_index)}</td>
             <td>${row.train_no}</td>
@@ -185,9 +196,19 @@ async function loadGatewayData() {
 }
 
 async function loadAlerts() {
-    const response = await fetch("/alerts");
-    const rows = await response.json();
-    document.getElementById("alerts-body").innerHTML = rows.slice(0, 10).map(row => `
+    const body = document.getElementById("alerts-body");
+    let rows = [];
+    try {
+        const response = await fetch("/alerts");
+        if (!response.ok) {
+            throw new Error("Alerts unavailable");
+        }
+        rows = await response.json();
+    } catch (error) {
+        body.innerHTML = `<tr><td colspan="10">Database unavailable. Check Render DATABASE_URL.</td></tr>`;
+        return;
+    }
+    body.innerHTML = rows.slice(0, 10).map(row => `
         <tr>
             <td>${valueOrDash(row.record_index)}</td>
             <td>${row.train_no}</td>
@@ -204,9 +225,16 @@ async function loadAlerts() {
 }
 
 async function loadRailmanPreview() {
-    const response = await fetch("/railman/export?limit=3");
-    const payload = await response.json();
-    document.getElementById("railman-preview").textContent = JSON.stringify(payload, null, 2);
+    try {
+        const response = await fetch("/railman/export?limit=3");
+        if (!response.ok) {
+            throw new Error("RailMAN export unavailable");
+        }
+        const payload = await response.json();
+        document.getElementById("railman-preview").textContent = JSON.stringify(payload, null, 2);
+    } catch (error) {
+        document.getElementById("railman-preview").textContent = "Database unavailable. Check Render DATABASE_URL.";
+    }
 }
 
 loadCloudStatus();
