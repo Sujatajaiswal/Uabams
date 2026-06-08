@@ -21,17 +21,6 @@
     <section class="panel">
         <div class="section-title-row">
             <div>
-                <h2>Cloud Status</h2>
-                <p class="helper-text">Public view for checking API, database, CSV reports, and RailMAN handoff readiness.</p>
-            </div>
-            <button type="button" onclick="loadCloudStatus()">Refresh Status</button>
-        </div>
-        <div id="cloud-status" class="status-grid"></div>
-    </section>
-
-    <section class="panel">
-        <div class="section-title-row">
-            <div>
                 <h2>CSV Downloads</h2>
                 <p class="helper-text">Each CSV is generated live from the Render PostgreSQL cloud database.</p>
             </div>
@@ -98,17 +87,6 @@
             </table>
         </div>
     </section>
-
-    <section class="panel">
-        <div class="section-title-row">
-            <div>
-                <h2>RailMAN Handoff</h2>
-                <p class="helper-text">Structured JSON export for later RailMAN/railway cloud integration.</p>
-            </div>
-            <a class="nav-link" href="/railman/export" target="_blank">Open RailMAN Export</a>
-        </div>
-        <pre id="railman-preview" class="json-preview">Loading RailMAN preview...</pre>
-    </section>
 </main>
 
 <script>
@@ -121,31 +99,6 @@ function formatNumber(value, digits = 2) {
         return "-";
     }
     return Number(value).toFixed(digits);
-}
-
-async function loadCloudStatus() {
-    const response = await fetch("/cloud/status");
-    const status = await response.json();
-    const statusGrid = document.getElementById("cloud-status");
-
-    const cards = [
-        ["API Status", status.api_status],
-        ["Database Status", status.database_status],
-        ["Cloud Database", status.cloud_database],
-        ["Database Host", status.database_host],
-        ["Schema Ready", status.schema_ready ? "Yes" : "No"],
-        ["RailMAN Ready", status.railman_ready ? "Yes" : "No"],
-        ["Gateway Endpoint", status.gateway_ingest_endpoint],
-        ["RailMAN Export", status.railman_export_endpoint],
-        ["Database Error", status.database_error || ""]
-    ];
-
-    statusGrid.innerHTML = cards.map(([label, value]) => `
-        <div class="status-item">
-            <span>${label}</span>
-            <strong>${valueOrDash(value)}</strong>
-        </div>
-    `).join("");
 }
 
 async function loadCsvReports() {
@@ -224,24 +177,9 @@ async function loadAlerts() {
     `).join("");
 }
 
-async function loadRailmanPreview() {
-    try {
-        const response = await fetch("/railman/export?limit=3");
-        if (!response.ok) {
-            throw new Error("RailMAN export unavailable");
-        }
-        const payload = await response.json();
-        document.getElementById("railman-preview").textContent = JSON.stringify(payload, null, 2);
-    } catch (error) {
-        document.getElementById("railman-preview").textContent = "Database unavailable. Check Render DATABASE_URL.";
-    }
-}
-
-loadCloudStatus();
 loadCsvReports();
 loadGatewayData();
 loadAlerts();
-loadRailmanPreview();
 </script>
 </body>
 </html>

@@ -6,9 +6,7 @@ Deploy the FastAPI cloud dashboard publicly on Render so anyone with the URL can
 
 - View latest gateway data.
 - View generated alerts.
-- Check cloud/database status.
 - Download CSV reports generated from Render PostgreSQL.
-- Open the RailMAN export JSON endpoint.
 
 ## Current Render Setup
 
@@ -76,21 +74,14 @@ https://your-service-name.onrender.com/csv/download/gateway-data
 https://your-service-name.onrender.com/csv/download/alerts
 ```
 
-## RailMAN Future Integration URL
-
-```text
-https://your-service-name.onrender.com/railman/export
-```
-
 ## Demo Explanation
 
 Say this in the meeting:
 
-> The database is hosted on Render PostgreSQL. I also deployed the FastAPI cloud dashboard on Render as a public Web Service. Anyone with the public URL can view stored gateway data, generated alerts, cloud/database status, and download CSV reports. The RailMAN export endpoint is prepared for future railway cloud integration.
+> The database is hosted on Render PostgreSQL. I also deployed the FastAPI cloud dashboard on Render as a public Web Service. Anyone with the public URL can view stored gateway data, generated alerts, and download CSV reports.
 
 ## Important Production Notes
 
 - For public demo, read-only viewing and CSV download are okay.
 - For production, add authentication before allowing write endpoints publicly.
 - Gateway devices should POST data to the deployed `/api/data` URL.
-- RailMAN can later consume `/railman/export` or the CSV endpoints depending on the required format.
