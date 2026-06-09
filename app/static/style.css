@@ -158,6 +158,24 @@ input {
     font-weight: 700;
 }
 
+.alert-banner {
+    border: 1px solid #d7dee4;
+    border-left: 5px solid #16636b;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 2px 8px rgba(20, 35, 48, 0.06);
+    color: #16636b;
+    font-weight: 700;
+    margin-bottom: 18px;
+    padding: 14px 16px;
+}
+
+.alert-banner.is-active {
+    border-left-color: #c2410c;
+    background: #fff7ed;
+    color: #9a3412;
+}
+
 .helper-text {
     margin: 0 0 14px;
     color: #55636f;
@@ -297,6 +315,14 @@ th {
     line-height: 1.45;
     padding: 14px;
     white-space: pre-wrap;
+}
+
+.map-panel {
+    width: 100%;
+    min-height: 420px;
+    border: 1px solid #d7dee4;
+    border-radius: 8px;
+    overflow: hidden;
 }
 
 @media (max-width: 640px) {

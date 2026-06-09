@@ -1,35 +1,57 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Alerts</title>
+    <title>Alert Map</title>
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 </head>
 
 <body>
 <main class="shell">
     <header class="page-header">
         <div>
-            <p class="eyebrow">Monitoring</p>
-            <h1>Alerts</h1>
+            <p class="eyebrow">Realtime Monitoring</p>
+            <h1>Alert Map</h1>
         </div>
-        <a class="nav-link" href="/dashboard">Dashboard</a>
+        <div class="header-actions">
+            <button type="button" id="notification-button">Enable Notifications</button>
+            <a class="nav-link" href="/dashboard">Dashboard</a>
+        </div>
     </header>
 
+    <section id="alert-notification" class="alert-banner">
+        Waiting for gateway alerts above 80 kmph.
+    </section>
+
     <section class="panel">
-        <h2>Generated Alerts</h2>
+        <div class="section-title-row">
+            <div>
+                <h2>Gateway Alert Location</h2>
+                <p class="helper-text">
+                    Alerts are shown when the gateway peak window is over the 80 kmph speed gate and one or more vibration axes cross the configured mg threshold. RMS samples are stored per about 25 cm spatial segment; peak alerts are summarized per 50 m window.
+                </p>
+            </div>
+            <button type="button" onclick="loadAlerts(true)">Refresh Alerts</button>
+        </div>
+        <div id="alert-map" class="map-panel"></div>
+    </section>
+
+    <section class="panel">
+        <h2>Alert Events</h2>
         <div class="table-wrap">
             <table>
                 <thead>
                     <tr>
+                        <th>Gateway</th>
                         <th>Train</th>
-                        <th>Route</th>
-                        <th>Type</th>
-                        <th>Measured</th>
-                        <th>Threshold</th>
+                        <th>Session</th>
+                        <th>Window</th>
                         <th>Speed</th>
-                        <th>KM</th>
-                        <th>Meter</th>
+                        <th>Axis</th>
+                        <th>Peak mg</th>
+                        <th>Threshold mg</th>
                         <th>Location</th>
+                        <th>Received At</th>
                     </tr>
                 </thead>
                 <tbody id="alerts-body"></tbody>
@@ -38,26 +60,183 @@
     </section>
 </main>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-async function loadAlerts() {
-    const response = await fetch("/alerts");
-    const rows = await response.json();
-    document.getElementById("alerts-body").innerHTML = rows.map(row => `
+const speedGateKmph = 80;
+const defaultCenter = [12.97, 77.59];
+const notificationButton = document.getElementById("notification-button");
+const notificationBanner = document.getElementById("alert-notification");
+let map;
+let markersLayer;
+
+function initMap() {
+    map = L.map("alert-map").setView(defaultCenter, 13);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+    markersLayer = L.layerGroup().addTo(map);
+}
+
+function formatNumber(value, digits = 2) {
+    if (value === null || value === undefined || value === "") {
+        return "-";
+    }
+    return Number(value).toFixed(digits);
+}
+
+function axisLabel(axis) {
+    return (axis || "-").replaceAll("_", " ").toUpperCase();
+}
+
+function normalizeCloudAlert(row) {
+    const axes = row.triggered_axes && row.triggered_axes.length ? row.triggered_axes : [{}];
+    return axes.map(axis => ({
+        id: row.alert_event_id,
+        gateway: row.gateway_id,
+        train: row.train_id,
+        session: row.session_name,
+        window: `${row.window_start_mm} - ${row.window_end_mm} mm`,
+        speed: row.speed_kmph,
+        axis: axis.axisName || "-",
+        peak: axis.peakValueMg,
+        threshold: axis.thresholdMg,
+        latitude: axis.peakLat ?? row.latitude,
+        longitude: axis.peakLon ?? row.longitude,
+        received: row.received_utc
+    }));
+}
+
+function normalizeLegacyAlert(row) {
+    return [{
+        id: `legacy-${row.id || row.created_at}`,
+        gateway: "-",
+        train: row.train_no,
+        session: row.route_name || "-",
+        window: `${row.km_marker ?? "-"} km / ${row.meter ?? "-"} m`,
+        speed: row.speed_kmph,
+        axis: row.alert_type,
+        peak: row.measured_value,
+        threshold: row.threshold_value,
+        latitude: row.latitude,
+        longitude: row.longitude,
+        received: row.created_at
+    }];
+}
+
+async function fetchAlerts() {
+    const cloudResponse = await fetch("/api/v1/alerts?limit=50");
+    if (cloudResponse.ok) {
+        const cloudRows = await cloudResponse.json();
+        if (cloudRows.length) {
+            return cloudRows.flatMap(normalizeCloudAlert);
+        }
+    }
+
+    const legacyResponse = await fetch("/alerts");
+    if (!legacyResponse.ok) {
+        return [];
+    }
+    const legacyRows = await legacyResponse.json();
+    return legacyRows.flatMap(normalizeLegacyAlert);
+}
+
+function renderTable(alerts) {
+    const body = document.getElementById("alerts-body");
+    if (!alerts.length) {
+        body.innerHTML = "<tr><td colspan=\"10\">No alert events received yet.</td></tr>";
+        return;
+    }
+
+    body.innerHTML = alerts.map(alert => `
         <tr>
-            <td>${row.train_no}</td>
-            <td>${row.route_name || ""}</td>
-            <td><span class="badge">${row.alert_type}</span></td>
-            <td>${row.measured_value}g</td>
-            <td>${row.threshold_value}g</td>
-            <td>${Number(row.speed_kmph || 0).toFixed(2)} kmph</td>
-            <td>${row.km_marker ?? ""}</td>
-            <td>${row.meter ?? ""}</td>
-            <td>${row.latitude}, ${row.longitude}</td>
+            <td>${alert.gateway || "-"}</td>
+            <td>${alert.train || "-"}</td>
+            <td>${alert.session || "-"}</td>
+            <td>${alert.window || "-"}</td>
+            <td>${formatNumber(alert.speed)} kmph</td>
+            <td><span class="badge">${axisLabel(alert.axis)}</span></td>
+            <td>${formatNumber(alert.peak, 0)}</td>
+            <td>${formatNumber(alert.threshold, 0)}</td>
+            <td>${formatNumber(alert.latitude, 6)}, ${formatNumber(alert.longitude, 6)}</td>
+            <td>${alert.received || "-"}</td>
         </tr>
     `).join("");
 }
 
+function renderMap(alerts) {
+    markersLayer.clearLayers();
+    const validAlerts = alerts.filter(alert =>
+        Number.isFinite(Number(alert.latitude)) && Number.isFinite(Number(alert.longitude))
+    );
+
+    if (!validAlerts.length) {
+        map.setView(defaultCenter, 13);
+        return;
+    }
+
+    const bounds = [];
+    validAlerts.forEach(alert => {
+        const position = [Number(alert.latitude), Number(alert.longitude)];
+        bounds.push(position);
+        L.marker(position).addTo(markersLayer).bindPopup(`
+            <strong>${axisLabel(alert.axis)} Alert</strong><br>
+            Train: ${alert.train || "-"}<br>
+            Speed: ${formatNumber(alert.speed)} kmph<br>
+            Peak: ${formatNumber(alert.peak, 0)} mg<br>
+            Threshold: ${formatNumber(alert.threshold, 0)} mg
+        `);
+    });
+
+    if (bounds.length === 1) {
+        map.setView(bounds[0], 15);
+    } else {
+        map.fitBounds(bounds, { padding: [30, 30] });
+    }
+}
+
+function showLatestNotification(alerts, force = false) {
+    const latest = alerts.find(alert => Number(alert.speed) >= speedGateKmph);
+    if (!latest) {
+        notificationBanner.textContent = "No speed-gated alert above 80 kmph is active.";
+        notificationBanner.classList.remove("is-active");
+        return;
+    }
+
+    const message = `${axisLabel(latest.axis)} alert on ${latest.train || "train"} at ${formatNumber(latest.speed)} kmph`;
+    notificationBanner.textContent = message;
+    notificationBanner.classList.add("is-active");
+
+    const lastSeen = localStorage.getItem("uabams_latest_alert_id");
+    if (force || String(latest.id) !== lastSeen) {
+        localStorage.setItem("uabams_latest_alert_id", latest.id);
+        if ("Notification" in window && Notification.permission === "granted") {
+            new Notification("UABAMS Alert", { body: message });
+        }
+    }
+}
+
+async function loadAlerts(forceNotification = false) {
+    const alerts = await fetchAlerts();
+    renderTable(alerts);
+    renderMap(alerts);
+    showLatestNotification(alerts, forceNotification);
+}
+
+notificationButton.addEventListener("click", async () => {
+    if (!("Notification" in window)) {
+        notificationBanner.textContent = "Browser notifications are not supported here.";
+        return;
+    }
+    const permission = await Notification.requestPermission();
+    notificationBanner.textContent = permission === "granted"
+        ? "Browser notifications enabled for new UABAMS alerts."
+        : "Browser notifications were not enabled. In-page alerts will still appear.";
+});
+
+initMap();
 loadAlerts();
+setInterval(loadAlerts, 10000);
 </script>
 
 </body>

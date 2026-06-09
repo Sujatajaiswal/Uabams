@@ -26,6 +26,17 @@ templates = Jinja2Templates(directory="app/templates")
 
 ALERT_SPEED_LIMIT_KMPH = 80
 SPATIAL_SAMPLE_DISTANCE_M = 0.25
+PEAK_AXIS_THRESHOLDS_MG = {
+    "al_x": 10000,
+    "al_y": 8000,
+    "al_z": 12000,
+    "ar_x": 10000,
+    "ar_y": 8000,
+    "ar_z": 12000,
+    "bg_x": 5000,
+    "bg_y": 4000,
+    "bg_z": 6000,
+}
 ARCHIVE_STORAGE_DIR = Path(os.getenv("ARCHIVE_STORAGE_DIR", "uploaded_archives"))
 SUPPORTED_SESSION_SCHEMA_VERSION = "1.0"
 SESSION_NAME_RE = re.compile(r"SESSION_\d{8}_\d{6}$")
@@ -435,6 +446,91 @@ def parse_peak_records(file_path: Path):
             }
         )
     return records
+
+
+def build_alert_event_from_peak_record(metadata: dict, peak_record: dict):
+    if not peak_record.get("alert_generated"):
+        return None
+    if peak_record.get("speed_kmph", 0) < ALERT_SPEED_LIMIT_KMPH:
+        return None
+
+    triggered_axes = []
+    for axis_name, axis in peak_record.get("axis_data", {}).items():
+        threshold_mg = PEAK_AXIS_THRESHOLDS_MG.get(axis_name)
+        peak_value_mg = axis.get("peak_value_mg")
+        if threshold_mg is None or peak_value_mg in (None, 0xFFFFFFFF):
+            continue
+        if peak_value_mg > threshold_mg:
+            triggered_axes.append(
+                {
+                    "axisName": axis_name,
+                    "peakValueMg": peak_value_mg,
+                    "thresholdMg": threshold_mg,
+                    "peakPositionMm": axis.get("peak_position_mm"),
+                    "peakLat": axis.get("peak_lat"),
+                    "peakLon": axis.get("peak_lon"),
+                }
+            )
+
+    if not triggered_axes:
+        candidate_axes = [
+            (axis_name, axis)
+            for axis_name, axis in peak_record.get("axis_data", {}).items()
+            if axis.get("peak_value_mg") not in (None, 0xFFFFFFFF)
+        ]
+        if candidate_axes:
+            axis_name, axis = max(candidate_axes, key=lambda item: item[1].get("peak_value_mg") or 0)
+            triggered_axes.append(
+                {
+                    "axisName": axis_name,
+                    "peakValueMg": axis.get("peak_value_mg"),
+                    "thresholdMg": PEAK_AXIS_THRESHOLDS_MG.get(axis_name, 0),
+                    "peakPositionMm": axis.get("peak_position_mm"),
+                    "peakLat": axis.get("peak_lat"),
+                    "peakLon": axis.get("peak_lon"),
+                }
+            )
+
+    if not triggered_axes:
+        return None
+
+    return {
+        "gatewayId": metadata["gatewayId"],
+        "trainId": metadata["trainId"],
+        "sessionName": metadata["sessionName"],
+        "windowStartMm": peak_record["window_start_mm"],
+        "windowEndMm": peak_record["window_end_mm"],
+        "speedKmph": peak_record["speed_kmph"],
+        "triggeredAxes": triggered_axes,
+    }
+
+
+def map_alert_event_row(row):
+    try:
+        payload = json.loads(row.payload_json or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+
+    axes = payload.get("triggeredAxes") or []
+    first_axis = axes[0] if axes else {}
+    latitude = first_axis.get("peakLat")
+    longitude = first_axis.get("peakLon")
+
+    return {
+        "alert_event_id": row.alert_event_id,
+        "gateway_id": row.gateway_id,
+        "train_id": row.train_id,
+        "session_name": row.session_name,
+        "window_start_mm": row.window_start_mm,
+        "window_end_mm": row.window_end_mm,
+        "speed_kmph": row.speed_kmph,
+        "triggered_axes_count": row.triggered_axes_count,
+        "triggered_axes": axes,
+        "latitude": latitude,
+        "longitude": longitude,
+        "received_utc": str(row.received_utc) if row.received_utc else None,
+        "payload": payload,
+    }
 
 
 def parse_fault_records(file_path: Path):
@@ -1416,6 +1512,44 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
                         "axis_data_json": json.dumps(peak_record["axis_data"]),
                     },
                 )
+                alert_payload = build_alert_event_from_peak_record(metadata, peak_record)
+                if alert_payload:
+                    conn.execute(
+                        text("""
+                            INSERT INTO cloud_alert_events
+                            (
+                                gateway_id,
+                                train_id,
+                                session_name,
+                                window_start_mm,
+                                window_end_mm,
+                                speed_kmph,
+                                triggered_axes_count,
+                                payload_json
+                            )
+                            VALUES
+                            (
+                                :gateway_id,
+                                :train_id,
+                                :session_name,
+                                :window_start_mm,
+                                :window_end_mm,
+                                :speed_kmph,
+                                :triggered_axes_count,
+                                :payload_json
+                            )
+                        """),
+                        {
+                            "gateway_id": alert_payload["gatewayId"],
+                            "train_id": alert_payload["trainId"],
+                            "session_name": alert_payload["sessionName"],
+                            "window_start_mm": alert_payload["windowStartMm"],
+                            "window_end_mm": alert_payload["windowEndMm"],
+                            "speed_kmph": alert_payload["speedKmph"],
+                            "triggered_axes_count": len(alert_payload["triggeredAxes"]),
+                            "payload_json": json.dumps(alert_payload),
+                        },
+                    )
 
             for fault_record in parse_fault_records(extract_dir / "faults/faults.bin"):
                 conn.execute(
@@ -1578,6 +1712,33 @@ def get_archive_files(archive_id: int):
         }
         for row in rows
     ]
+
+
+@app.get("/api/v1/alerts")
+def get_cloud_alert_events(limit: int = 50):
+    init_db()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT
+                    alert_event_id,
+                    gateway_id,
+                    train_id,
+                    session_name,
+                    window_start_mm,
+                    window_end_mm,
+                    speed_kmph,
+                    triggered_axes_count,
+                    payload_json,
+                    received_utc
+                FROM cloud_alert_events
+                ORDER BY alert_event_id DESC
+                LIMIT :limit
+            """),
+            {"limit": limit},
+        ).fetchall()
+
+    return [map_alert_event_row(row) for row in rows]
 
 
 @app.post("/api/v1/alerts")
