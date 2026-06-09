@@ -16,9 +16,27 @@
     </header>
 
     <section class="panel">
+        <h2>Upload Gateway Session ZIP</h2>
+        <p class="helper-text">
+            Upload the ICD session archive created by the gateway. After a successful upload, the cloud stores the ZIP, extracts the files, parses the binary records, and generates the CSV reports below.
+        </p>
+        <form id="archive-upload-form" class="form-grid">
+            <label>
+                Session ZIP
+                <input id="archive-file" type="file" accept=".zip,application/zip">
+            </label>
+            <label>
+                Archive Filename
+                <input id="archive-filename" type="text" placeholder="GW_BOGIE_001__TRAIN_07__SESSION_20260609_083015.zip">
+            </label>
+            <button type="submit">Upload Archive</button>
+        </form>
+    </section>
+
+    <section class="panel">
         <h2>Cloud Data CSV Downloads</h2>
         <p class="helper-text">
-            These CSV files are generated from the current PostgreSQL cloud database records.
+            These CSV files are generated from uploaded ICD session archive records stored in the PostgreSQL cloud database.
         </p>
         <div id="report-list" class="report-list"></div>
         <p id="message" class="message"></p>
@@ -36,6 +54,57 @@
 </main>
 
 <script>
+const archiveFile = document.getElementById("archive-file");
+const archiveFilename = document.getElementById("archive-filename");
+const archiveUploadForm = document.getElementById("archive-upload-form");
+const message = document.getElementById("message");
+
+archiveFile.addEventListener("change", () => {
+    if (archiveFile.files.length && !archiveFilename.value) {
+        archiveFilename.value = archiveFile.files[0].name;
+    }
+});
+
+archiveUploadForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    if (!archiveFile.files.length) {
+        message.textContent = "Please select a gateway session ZIP file.";
+        return;
+    }
+
+    const filename = archiveFilename.value.trim();
+    if (!filename) {
+        message.textContent = "Please enter the archive filename.";
+        return;
+    }
+
+    message.textContent = "Uploading archive and parsing records...";
+
+    try {
+        const response = await fetch(`/api/v1/archive?filename=${encodeURIComponent(filename)}`, {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/zip",
+                "X-Archive-Name": filename
+            },
+            body: archiveFile.files[0]
+        });
+        const result = await response.json();
+
+        if (!response.ok) {
+            message.textContent = result.detail || "Archive upload failed.";
+            return;
+        }
+
+        message.textContent = `Archive uploaded: ${result.archiveName || filename}. Validation: ${result.validationStatus || "ok"}.`;
+        await loadReports();
+        await previewReport("archives");
+    } catch (error) {
+        message.textContent = `Archive upload failed: ${error.message}`;
+    }
+});
+
 async function loadReports() {
     const response = await fetch("/csv/reports");
     const reports = await response.json();
@@ -63,7 +132,6 @@ async function previewReport(name) {
     const response = await fetch(`/csv/preview/${name}?limit=20`);
     const report = await response.json();
     const table = document.getElementById("preview-table");
-    const message = document.getElementById("message");
 
     document.getElementById("preview-title").textContent = `${report.title} Preview`;
 
