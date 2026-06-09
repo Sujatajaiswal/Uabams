@@ -4,6 +4,7 @@ import requests
 from PyQt5.QtWidgets import (
     QApplication,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -40,6 +41,18 @@ class ApiClient:
         response.raise_for_status()
         return response.json()
 
+    def put_file(self, path, file_path, params=None, headers=None):
+        with open(file_path, "rb") as file_handle:
+            response = requests.put(
+                f"{self.base_url}{path}",
+                params=params,
+                data=file_handle,
+                headers=headers or {},
+                timeout=60,
+            )
+        response.raise_for_status()
+        return response.json()
+
 
 class UabamsDesktop(QMainWindow):
     def __init__(self):
@@ -67,9 +80,10 @@ class UabamsDesktop(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(self.build_wheel_tab(), "Wheel Calibration")
         self.tabs.addTab(self.build_threshold_tab(), "Threshold")
-        self.tabs.addTab(self.build_gateway_tab(), "Gateway Data")
-        self.tabs.addTab(self.build_alerts_tab(), "Alerts")
-        self.tabs.addTab(self.build_cloud_tab(), "Cloud Status")
+        self.tabs.addTab(self.build_archive_tab(), "Gateway Archive")
+        self.tabs.addTab(self.build_parsed_records_tab(), "Parsed Records")
+        self.tabs.addTab(self.build_alert_events_tab(), "Alert Events")
+        self.tabs.addTab(self.build_cloud_tab(), "Cloud Summary")
         main_layout.addWidget(self.tabs)
 
         self.status = QLabel("Ready")
@@ -146,63 +160,72 @@ class UabamsDesktop(QMainWindow):
         layout.addStretch()
         return tab
 
-    def build_gateway_tab(self):
+    def build_archive_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        form_box = QGroupBox("Send Gateway Data")
+        form_box = QGroupBox("Upload Gateway Session ZIP")
         form = QFormLayout(form_box)
-        self.record_index = self.int_input(757, 0, 999999999)
-        self.gateway_train = QLineEdit("TRAIN001")
-        self.gateway_route = QLineEdit("DEFAULT")
-        self.km_marker = self.int_input(42, 0, 99999)
-        self.meter = self.double_input(450.25, 0, 999.75)
-        self.vertical_g = self.double_input(75, -100, 100)
-        self.lateral_g = self.double_input(20, -100, 100)
-        self.speed_kmph = self.double_input(90, 0, 300)
-        self.latitude = self.double_input(12.97, -90, 90, decimals=6)
-        self.longitude = self.double_input(77.59, -180, 180, decimals=6)
-        self.status_code = self.int_input(1, 0, 999)
-        send_button = QPushButton("Send Gateway Data")
-        send_button.clicked.connect(self.send_gateway_data)
+        self.archive_path = QLineEdit()
+        self.archive_name = QLineEdit()
+        self.archive_name.setPlaceholderText("GW_BOGIE_001__TRAIN_07__SESSION_20260609_083015.zip")
+        browse_button = QPushButton("Browse ZIP")
+        browse_button.clicked.connect(self.browse_archive)
+        upload_button = QPushButton("Upload Archive")
+        upload_button.clicked.connect(self.upload_archive)
 
-        form.addRow("Record Index", self.record_index)
-        form.addRow("Train No", self.gateway_train)
-        form.addRow("Route Name", self.gateway_route)
-        form.addRow("KM Marker", self.km_marker)
-        form.addRow("Meter", self.meter)
-        form.addRow("Vertical g", self.vertical_g)
-        form.addRow("Lateral g", self.lateral_g)
-        form.addRow("Speed kmph", self.speed_kmph)
-        form.addRow("Latitude", self.latitude)
-        form.addRow("Longitude", self.longitude)
-        form.addRow("Status Code", self.status_code)
-        form.addRow(send_button)
+        file_row = QHBoxLayout()
+        file_row.addWidget(self.archive_path)
+        file_row.addWidget(browse_button)
+        form.addRow("Session ZIP", file_row)
+        form.addRow("Archive Filename", self.archive_name)
+        form.addRow(upload_button)
         layout.addWidget(form_box)
 
-        self.gateway_table = self.table([
-            "Index", "Train", "Route", "KM", "Meter", "Vertical", "Lateral",
-            "Speed", "Corrected Speed", "Correction", "Status", "Location", "Created At"
+        self.archive_table = self.table([
+            "Archive ID", "Gateway", "Train", "Session", "Archive Name",
+            "Size", "Status", "Received At"
         ])
-        layout.addWidget(self.gateway_table)
+        layout.addWidget(self.archive_table)
 
-        refresh = QPushButton("Refresh Gateway Data")
-        refresh.clicked.connect(self.load_gateway_data)
+        refresh = QPushButton("Refresh Session Archives")
+        refresh.clicked.connect(self.load_archives)
         layout.addWidget(refresh)
         return tab
 
-    def build_alerts_tab(self):
+    def build_parsed_records_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        self.alert_table = self.table([
-            "Index", "Train", "Route", "Type", "Measured", "Threshold",
-            "Speed", "KM", "Meter", "Status", "Location", "Created At"
-        ])
-        layout.addWidget(self.alert_table)
+        self.parsed_record_selector = QLineEdit("rms-records")
+        self.parsed_record_selector.setPlaceholderText("archives, rms-records, peak-records, fault-records, raw-packet-records")
+        refresh = QPushButton("Refresh Parsed Records")
+        refresh.clicked.connect(self.load_parsed_records)
+        selector_row = QHBoxLayout()
+        selector_row.addWidget(QLabel("CSV Report"))
+        selector_row.addWidget(self.parsed_record_selector)
+        selector_row.addWidget(refresh)
+        layout.addLayout(selector_row)
 
-        refresh = QPushButton("Refresh Alerts")
-        refresh.clicked.connect(self.load_alerts)
+        self.parsed_table = self.table([
+            "Column 1", "Column 2", "Column 3", "Column 4", "Column 5",
+            "Column 6", "Column 7", "Column 8"
+        ])
+        layout.addWidget(self.parsed_table)
+        return tab
+
+    def build_alert_events_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        self.alert_event_table = self.table([
+            "ID", "Gateway", "Train", "Session", "Window", "Speed",
+            "Axes Count", "Received At"
+        ])
+        layout.addWidget(self.alert_event_table)
+
+        refresh = QPushButton("Refresh Alert Events")
+        refresh.clicked.connect(self.load_alert_events)
         layout.addWidget(refresh)
         return tab
 
@@ -213,16 +236,16 @@ class UabamsDesktop(QMainWindow):
         self.cloud_table = self.table(["Item", "Value"])
         layout.addWidget(self.cloud_table)
 
-        self.railman_preview = QPlainTextEdit()
-        self.railman_preview.setReadOnly(True)
-        self.railman_preview.setPlaceholderText("RailMAN export preview will appear here.")
-        layout.addWidget(self.railman_preview)
+        self.csv_preview = QPlainTextEdit()
+        self.csv_preview.setReadOnly(True)
+        self.csv_preview.setPlaceholderText("Cloud CSV report preview will appear here.")
+        layout.addWidget(self.csv_preview)
 
         buttons = QHBoxLayout()
-        refresh = QPushButton("Refresh Cloud Status")
+        refresh = QPushButton("Refresh Cloud Summary")
         refresh.clicked.connect(self.load_cloud_status)
-        preview = QPushButton("Preview RailMAN Export")
-        preview.clicked.connect(self.load_railman_export)
+        preview = QPushButton("Preview Session Archives JSON")
+        preview.clicked.connect(self.load_archive_preview)
         buttons.addWidget(refresh)
         buttons.addWidget(preview)
         layout.addLayout(buttons)
@@ -253,27 +276,43 @@ class UabamsDesktop(QMainWindow):
             self.show_status(result.get("message", "Threshold saved"))
             self.load_threshold()
 
-    def send_gateway_data(self):
-        payload = {
-            "record_index": self.record_index.value(),
-            "train_no": self.gateway_train.text(),
-            "route_name": self.gateway_route.text() or "DEFAULT",
-            "km_marker": self.km_marker.value(),
-            "meter": self.meter.value(),
-            "vertical_g": self.vertical_g.value(),
-            "lateral_g": self.lateral_g.value(),
-            "speed_kmph": self.speed_kmph.value(),
-            "latitude": self.latitude.value(),
-            "longitude": self.longitude.value(),
-            "status_code": self.status_code.value(),
-            "sample_distance_m": 0.25,
-        }
-        result = self.call(lambda: self.client.post("/api/data", payload))
+    def browse_archive(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Gateway Session ZIP",
+            "",
+            "ZIP Archives (*.zip)",
+        )
+        if not file_path:
+            return
+        self.archive_path.setText(file_path)
+        self.archive_name.setText(file_path.split("/")[-1].split("\\")[-1])
+
+    def upload_archive(self):
+        file_path = self.archive_path.text().strip()
+        archive_name = self.archive_name.text().strip()
+        if not file_path or not archive_name:
+            QMessageBox.warning(self, "Archive Upload", "Please select a ZIP file and enter the archive filename.")
+            return
+
+        result = self.call(
+            lambda: self.client.put_file(
+                "/api/v1/archive",
+                file_path,
+                params={"filename": archive_name},
+                headers={
+                    "Content-Type": "application/zip",
+                    "X-Archive-Name": archive_name,
+                },
+            )
+        )
         if result:
-            alerts = ", ".join(result.get("generated_alerts", [])) or "No alerts"
-            self.show_status(f"{result.get('message')} | {alerts}")
-            self.load_gateway_data()
-            self.load_alerts()
+            self.show_status(
+                f"Archive uploaded: {result.get('archiveName', archive_name)} | "
+                f"Validation {result.get('validationStatus', 'ok')}"
+            )
+            self.load_archives()
+            self.load_parsed_records()
 
     def load_wheel_calibration(self):
         rows = self.call(lambda: self.client.get("/wheel-calibration"))
@@ -303,35 +342,41 @@ class UabamsDesktop(QMainWindow):
         else:
             self.active_threshold.setText(row.get("message", "No threshold configured"))
 
-    def load_gateway_data(self):
-        rows = self.call(lambda: self.client.get("/api/data"))
+    def load_archives(self):
+        rows = self.call(lambda: self.client.get("/api/v1/archives", {"limit": 50}))
         if rows is None:
             return
         self.fill_table(
-            self.gateway_table,
+            self.archive_table,
             rows,
             [
-                "record_index", "train_no", "route_name", "km_marker", "meter",
-                "vertical_g", "lateral_g", "speed_kmph",
-                "corrected_speed_kmph", "wheel_correction_factor", "status_code",
-                ("location", lambda row: f"{row.get('latitude')}, {row.get('longitude')}"),
-                "created_at",
+                "archive_id", "gateway_id", "train_id", "session_name",
+                "archive_name", "archive_size_bytes", "validation_status",
+                "upload_received_utc",
             ],
         )
 
-    def load_alerts(self):
-        rows = self.call(lambda: self.client.get("/alerts"))
-        if rows is None:
+    def load_parsed_records(self):
+        report_name = self.parsed_record_selector.text().strip() or "rms-records"
+        report = self.call(lambda: self.client.get(f"/csv/preview/{report_name}", {"limit": 25}))
+        if not report:
             return
+        rows = report.get("rows", [])
+        self.fill_dynamic_table(self.parsed_table, rows)
+        self.show_status(f"Loaded {len(rows)} rows from {report.get('title', report_name)}")
+
+    def load_alert_events(self):
+        report = self.call(lambda: self.client.get("/csv/preview/cloud-alert-events", {"limit": 50}))
+        if not report:
+            return
+        rows = report.get("rows", [])
         self.fill_table(
-            self.alert_table,
+            self.alert_event_table,
             rows,
             [
-                "record_index", "train_no", "route_name", "alert_type",
-                "measured_value", "threshold_value", "speed_kmph",
-                "km_marker", "meter", "status_code",
-                ("location", lambda row: f"{row.get('latitude')}, {row.get('longitude')}"),
-                "created_at",
+                "alert_event_id", "gateway_id", "train_id", "session_name",
+                ("window", lambda row: f"{row.get('window_start_mm')} - {row.get('window_end_mm')}"),
+                "speed_kmph", "triggered_axes_count", "received_utc",
             ],
         )
 
@@ -346,27 +391,28 @@ class UabamsDesktop(QMainWindow):
             {"item": "Database Host", "value": status.get("database_host")},
             {"item": "Schema Ready", "value": status.get("schema_ready")},
             {"item": "Available Tables", "value": ", ".join(status.get("available_tables", []))},
-            {"item": "Gateway Endpoint", "value": status.get("gateway_ingest_endpoint")},
-            {"item": "RailMAN Export", "value": status.get("railman_export_endpoint")},
+            {"item": "Gateway Archive Endpoint", "value": "/api/v1/archive"},
+            {"item": "CSV Reports Page", "value": "/csv-page"},
             {"item": "Database Time", "value": status.get("database_time")},
         ]
         self.fill_table(self.cloud_table, rows, ["item", "value"])
-        self.show_status("Cloud status refreshed")
+        self.show_status("Cloud summary refreshed")
 
-    def load_railman_export(self):
-        export = self.call(lambda: self.client.get("/railman/export", {"limit": 5}))
-        if not export:
+    def load_archive_preview(self):
+        preview = self.call(lambda: self.client.get("/csv/preview/archives", {"limit": 5}))
+        if not preview:
             return
         import json
 
-        self.railman_preview.setPlainText(json.dumps(export, indent=2))
-        self.show_status("RailMAN export preview loaded")
+        self.csv_preview.setPlainText(json.dumps(preview, indent=2))
+        self.show_status("Session archive preview loaded")
 
     def refresh_all(self):
         self.load_threshold()
         self.load_wheel_calibration()
-        self.load_gateway_data()
-        self.load_alerts()
+        self.load_archives()
+        self.load_parsed_records()
+        self.load_alert_events()
         self.load_cloud_status()
 
     def call(self, fn):
@@ -386,6 +432,7 @@ class UabamsDesktop(QMainWindow):
             return None
 
     def fill_table(self, table, rows, fields):
+        table.setColumnCount(len(fields))
         table.setRowCount(len(rows))
         for row_index, row in enumerate(rows):
             for col_index, field in enumerate(fields):
@@ -394,6 +441,26 @@ class UabamsDesktop(QMainWindow):
                 else:
                     value = row.get(field, "")
                 table.setItem(row_index, col_index, QTableWidgetItem(self.format_value(value)))
+        table.resizeColumnsToContents()
+
+    def fill_dynamic_table(self, table, rows):
+        if not rows:
+            table.clear()
+            table.setColumnCount(1)
+            table.setHorizontalHeaderLabels(["Message"])
+            table.setRowCount(1)
+            table.setItem(0, 0, QTableWidgetItem("No records found yet. Upload a valid gateway session ZIP first."))
+            table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            return
+
+        columns = list(rows[0].keys())
+        table.clear()
+        table.setColumnCount(len(columns))
+        table.setHorizontalHeaderLabels([column.replace("_", " ").title() for column in columns])
+        table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            for col_index, column in enumerate(columns):
+                table.setItem(row_index, col_index, QTableWidgetItem(self.format_value(row.get(column))))
         table.resizeColumnsToContents()
 
     def table(self, headers):

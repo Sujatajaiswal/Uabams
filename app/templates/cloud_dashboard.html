@@ -41,6 +41,18 @@
                 <strong>Render PostgreSQL</strong>
             </div>
         </div>
+        <form id="archive-upload-form" class="form-grid" style="margin-top: 16px;">
+            <label>
+                Session ZIP
+                <input id="archive-file" type="file" accept=".zip,application/zip">
+            </label>
+            <label>
+                Archive Filename
+                <input id="archive-filename" type="text" placeholder="GW_BOGIE_001__TRAIN_07__SESSION_20260609_083015.zip">
+            </label>
+            <button type="submit">Upload Archive</button>
+        </form>
+        <p id="upload-message" class="message"></p>
     </section>
 
     <section class="panel">
@@ -233,6 +245,61 @@ function formatNumber(value, digits = 2) {
     }
     return Number(value).toFixed(digits);
 }
+
+const archiveFile = document.getElementById("archive-file");
+const archiveFilename = document.getElementById("archive-filename");
+const archiveUploadForm = document.getElementById("archive-upload-form");
+const uploadMessage = document.getElementById("upload-message");
+
+archiveFile.addEventListener("change", () => {
+    if (archiveFile.files.length && !archiveFilename.value) {
+        archiveFilename.value = archiveFile.files[0].name;
+    }
+});
+
+archiveUploadForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    if (!archiveFile.files.length) {
+        uploadMessage.textContent = "Please select a gateway session ZIP file.";
+        return;
+    }
+
+    const filename = archiveFilename.value.trim();
+    if (!filename) {
+        uploadMessage.textContent = "Please enter the archive filename.";
+        return;
+    }
+
+    uploadMessage.textContent = "Uploading archive and parsing records...";
+
+    try {
+        const response = await fetch(`/api/v1/archive?filename=${encodeURIComponent(filename)}`, {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/zip",
+                "X-Archive-Name": filename
+            },
+            body: archiveFile.files[0]
+        });
+        const result = await response.json();
+
+        if (!response.ok) {
+            uploadMessage.textContent = result.detail || "Archive upload failed.";
+            return;
+        }
+
+        uploadMessage.textContent = `Archive uploaded: ${result.archiveName || filename}. Validation: ${result.validationStatus || "ok"}.`;
+        loadArchives();
+        loadRmsRecords();
+        loadPeakRecords();
+        loadFaultRecords();
+        loadRawPackets();
+        loadCsvReports();
+    } catch (error) {
+        uploadMessage.textContent = `Archive upload failed: ${error.message}`;
+    }
+});
 
 async function loadCsvReports() {
     const response = await fetch("/csv/reports");
