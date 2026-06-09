@@ -46,93 +46,6 @@ FIXED_RECORD_SIZES = {
 }
 
 CSV_REPORTS = {
-    "wheel-calibration": {
-        "title": "Wheel Calibration",
-        "filename": "uabams_wheel_calibration.csv",
-        "query": """
-            SELECT
-                id,
-                train_no,
-                axle_no,
-                wheel_position,
-                new_wheel_diameter_mm,
-                current_wheel_diameter_mm,
-                encoder_pulses_per_rev,
-                circumference_mm,
-                distance_per_pulse_mm,
-                wheel_wear_mm,
-                correction_factor,
-                created_at
-            FROM wheel_calibration
-            ORDER BY id DESC
-            LIMIT :limit
-        """,
-    },
-    "thresholds": {
-        "title": "Thresholds",
-        "filename": "uabams_thresholds.csv",
-        "query": """
-            SELECT
-                id,
-                route_name,
-                vertical_threshold,
-                lateral_threshold,
-                created_at
-            FROM thresholds
-            ORDER BY id DESC
-            LIMIT :limit
-        """,
-    },
-    "gateway-data": {
-        "title": "Gateway Data",
-        "filename": "uabams_gateway_data.csv",
-        "query": """
-            SELECT
-                id,
-                record_index,
-                train_no,
-                route_name,
-                km_marker,
-                meter,
-                vertical_g,
-                lateral_g,
-                speed_kmph,
-                corrected_speed_kmph,
-                wheel_correction_factor,
-                latitude,
-                longitude,
-                status_code,
-                sample_distance_m,
-                created_at
-            FROM acceleration_data
-            ORDER BY id DESC
-            LIMIT :limit
-        """,
-    },
-    "alerts": {
-        "title": "Alerts",
-        "filename": "uabams_alerts.csv",
-        "query": """
-            SELECT
-                id,
-                route_name,
-                record_index,
-                train_no,
-                alert_type,
-                measured_value,
-                threshold_value,
-                speed_kmph,
-                km_marker,
-                meter,
-                latitude,
-                longitude,
-                status_code,
-                created_at
-            FROM alerts
-            ORDER BY id DESC
-            LIMIT :limit
-        """,
-    },
     "archives": {
         "title": "Session Archives",
         "filename": "uabams_session_archives.csv",
@@ -150,6 +63,24 @@ CSV_REPORTS = {
                 validation_status
             FROM archives
             ORDER BY archive_id DESC
+            LIMIT :limit
+        """,
+    },
+    "extracted-files": {
+        "title": "Extracted Files",
+        "filename": "uabams_extracted_files.csv",
+        "query": """
+            SELECT
+                file_id,
+                archive_id,
+                session_id,
+                file_relative_path,
+                extracted_at_utc,
+                file_size_bytes,
+                storage_uri,
+                integrity_ok
+            FROM extracted_files
+            ORDER BY file_id DESC
             LIMIT :limit
         """,
     },
@@ -302,36 +233,13 @@ def parse_archive_filename(archive_name: str):
         )
 
     stem = archive_name[:-4]
-    if "__" in stem:
-        parts = stem.split("__")
-        if len(parts) != 3:
-            raise HTTPException(
-                status_code=422,
-                detail="Invalid archive filename. Expected exactly three fields separated by double underscores.",
-            )
-        gateway_id, train_id, session_name = parts
-    else:
-        session_match = re.search(r"_SESSION_\d{8}_\d{6}$", stem)
-        if not session_match:
-            raise HTTPException(
-                status_code=422,
-                detail="Invalid session name. Expected SESSION_YYYYMMDD_HHMMSS in archive filename.",
-            )
-
-        session_name = stem[session_match.start() + 1:]
-        identity_part = stem[:session_match.start()]
-
-        if "_TRAIN_" in identity_part:
-            gateway_id, train_suffix = identity_part.split("_TRAIN_", 1)
-            train_id = f"TRAIN_{train_suffix}"
-        else:
-            try:
-                gateway_id, train_id = identity_part.rsplit("_", 1)
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Invalid archive identity. Expected <gatewayId>_<trainId> before session name.",
-                ) from exc
+    parts = stem.split("__")
+    if len(parts) != 3:
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid archive filename. Expected exactly three fields separated by double underscores.",
+        )
+    gateway_id, train_id, session_name = parts
 
     if not gateway_id or not train_id or not SESSION_NAME_RE.match(session_name):
         raise HTTPException(
