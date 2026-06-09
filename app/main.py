@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import struct
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -171,6 +172,92 @@ CSV_REPORTS = {
             LIMIT :limit
         """,
     },
+    "rms-records": {
+        "title": "RMS 25cm Records",
+        "filename": "uabams_rms_25cm_records.csv",
+        "query": """
+            SELECT
+                rms_id,
+                session_id,
+                record_index,
+                master_count,
+                position_mm,
+                latitude,
+                longitude,
+                gps_valid,
+                valid_mask,
+                al_x_mg,
+                al_y_mg,
+                al_z_mg,
+                ar_x_mg,
+                ar_y_mg,
+                ar_z_mg,
+                bg_x_mg,
+                bg_y_mg,
+                bg_z_mg
+            FROM rms_records
+            ORDER BY rms_id DESC
+            LIMIT :limit
+        """,
+    },
+    "peak-records": {
+        "title": "Peak 50m Records",
+        "filename": "uabams_peak_50m_records.csv",
+        "query": """
+            SELECT
+                peak_id,
+                session_id,
+                record_index,
+                window_start_mm,
+                window_end_mm,
+                speed_kmph,
+                valid_mask,
+                alert_generated,
+                axis_data_json
+            FROM peak_records
+            ORDER BY peak_id DESC
+            LIMIT :limit
+        """,
+    },
+    "fault-records": {
+        "title": "Fault Records",
+        "filename": "uabams_fault_records.csv",
+        "query": """
+            SELECT
+                fault_id,
+                session_id,
+                record_index,
+                timestamp_ms,
+                fault_code,
+                node_id,
+                severity,
+                description
+            FROM fault_records
+            ORDER BY fault_id DESC
+            LIMIT :limit
+        """,
+    },
+    "raw-packet-records": {
+        "title": "Raw Packet Metadata",
+        "filename": "uabams_raw_packet_records.csv",
+        "query": """
+            SELECT
+                raw_packet_id,
+                session_id,
+                file_relative_path,
+                record_index,
+                packet_length,
+                sof,
+                packet_type,
+                node_id,
+                sequence_number,
+                eof,
+                truncated
+            FROM raw_packet_records
+            ORDER BY raw_packet_id DESC
+            LIMIT :limit
+        """,
+    },
 }
 
 
@@ -211,38 +298,46 @@ def parse_archive_filename(archive_name: str):
     if not archive_name.endswith(".zip"):
         raise HTTPException(
             status_code=422,
-            detail="Invalid archive filename. Expected <gatewayId>_<trainId>_<sessionName>.zip",
+            detail="Invalid archive filename. Expected <gatewayId>__<trainId>__<sessionName>.zip",
         )
 
     stem = archive_name[:-4]
-    session_match = re.search(r"_SESSION_\d{8}_\d{6}$", stem)
-    if not session_match:
-        raise HTTPException(
-            status_code=422,
-            detail="Invalid session name. Expected SESSION_YYYYMMDD_HHMMSS in archive filename.",
-        )
-
-    session_name = stem[session_match.start() + 1:]
-    identity_part = stem[:session_match.start()]
-
-    if "_TRAIN_" in identity_part:
-        gateway_id, train_suffix = identity_part.split("_TRAIN_", 1)
-        train_id = f"TRAIN_{train_suffix}"
-    else:
-        try:
-            gateway_id, train_id = identity_part.rsplit("_", 1)
-        except ValueError as exc:
+    if "__" in stem:
+        parts = stem.split("__")
+        if len(parts) != 3:
             raise HTTPException(
                 status_code=422,
-                detail="Invalid archive identity. Expected <gatewayId>_<trainId> before session name.",
-            ) from exc
+                detail="Invalid archive filename. Expected exactly three fields separated by double underscores.",
+            )
+        gateway_id, train_id, session_name = parts
+    else:
+        session_match = re.search(r"_SESSION_\d{8}_\d{6}$", stem)
+        if not session_match:
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid session name. Expected SESSION_YYYYMMDD_HHMMSS in archive filename.",
+            )
+
+        session_name = stem[session_match.start() + 1:]
+        identity_part = stem[:session_match.start()]
+
+        if "_TRAIN_" in identity_part:
+            gateway_id, train_suffix = identity_part.split("_TRAIN_", 1)
+            train_id = f"TRAIN_{train_suffix}"
+        else:
+            try:
+                gateway_id, train_id = identity_part.rsplit("_", 1)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Invalid archive identity. Expected <gatewayId>_<trainId> before session name.",
+                ) from exc
 
     if not gateway_id or not train_id or not SESSION_NAME_RE.match(session_name):
         raise HTTPException(
             status_code=422,
-            detail="Invalid archive filename. Expected <gatewayId>_<trainId>_<sessionName>.zip",
+            detail="Invalid archive filename. Expected <gatewayId>__<trainId>__<sessionName>.zip",
         )
-
     return {
         "gateway_id": gateway_id,
         "train_id": train_id,
@@ -348,6 +443,161 @@ def parse_created_utc(value):
         return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
     except ValueError:
         return None
+
+
+def iter_fixed_records(file_path: Path, record_size: int):
+    if not file_path.exists():
+        return
+    data = file_path.read_bytes()
+    usable_size = len(data) - (len(data) % record_size)
+    for index, offset in enumerate(range(0, usable_size, record_size)):
+        yield index, data[offset:offset + record_size]
+
+
+def parse_rms_records(file_path: Path):
+    records = []
+    for record_index, raw in iter_fixed_records(file_path, 66) or []:
+        values = struct.unpack_from("<QiddBBIIIIIIIII", raw, 0)
+        records.append(
+            {
+                "record_index": record_index,
+                "master_count": values[0],
+                "position_mm": values[1],
+                "latitude": values[2],
+                "longitude": values[3],
+                "gps_valid": bool(values[4]),
+                "valid_mask": values[5],
+                "al_x_mg": values[6],
+                "al_y_mg": values[7],
+                "al_z_mg": values[8],
+                "ar_x_mg": values[9],
+                "ar_y_mg": values[10],
+                "ar_z_mg": values[11],
+                "bg_x_mg": values[12],
+                "bg_y_mg": values[13],
+                "bg_z_mg": values[14],
+            }
+        )
+    return records
+
+
+def parse_peak_axis(raw: bytes, base: int):
+    peak_value_mg, peak_position_mm, peak_master_count, peak_lat, peak_lon = struct.unpack_from(
+        "<IiQdd", raw, base
+    )
+    return {
+        "peak_value_mg": peak_value_mg,
+        "peak_position_mm": peak_position_mm,
+        "peak_master_count": peak_master_count,
+        "peak_lat": peak_lat,
+        "peak_lon": peak_lon,
+    }
+
+
+def parse_peak_records(file_path: Path):
+    axis_offsets = {
+        "al_x": 14,
+        "al_y": 46,
+        "al_z": 78,
+        "ar_x": 110,
+        "ar_y": 142,
+        "ar_z": 174,
+        "bg_x": 206,
+        "bg_y": 238,
+        "bg_z": 270,
+    }
+    records = []
+    for record_index, raw in iter_fixed_records(file_path, 302) or []:
+        window_start_mm, window_end_mm, speed_kmph, valid_mask, alert_generated = struct.unpack_from(
+            "<iifBB", raw, 0
+        )
+        axis_data = {
+            axis: parse_peak_axis(raw, offset)
+            for axis, offset in axis_offsets.items()
+        }
+        records.append(
+            {
+                "record_index": record_index,
+                "window_start_mm": window_start_mm,
+                "window_end_mm": window_end_mm,
+                "speed_kmph": speed_kmph,
+                "valid_mask": valid_mask,
+                "alert_generated": bool(alert_generated),
+                "axis_data": axis_data,
+            }
+        )
+    return records
+
+
+def parse_fault_records(file_path: Path):
+    records = []
+    for record_index, raw in iter_fixed_records(file_path, 75) or []:
+        timestamp_ms = struct.unpack_from("<Q", raw, 0)[0]
+        fault_code = raw[8]
+        node_id = raw[9]
+        severity = raw[10]
+        description = raw[11:75].split(b"\x00", 1)[0].decode("ascii", errors="replace")
+        records.append(
+            {
+                "record_index": record_index,
+                "timestamp_ms": timestamp_ms,
+                "fault_code": fault_code,
+                "node_id": node_id,
+                "severity": severity,
+                "description": description,
+            }
+        )
+    return records
+
+
+def parse_raw_packet_records(file_path: Path):
+    records = []
+    if not file_path.exists():
+        return records
+    data = file_path.read_bytes()
+    offset = 0
+    record_index = 0
+    truncated = False
+    while offset < len(data):
+        if len(data) - offset < 4:
+            truncated = True
+            break
+        packet_length = struct.unpack_from("<I", data, offset)[0]
+        frame_start = offset + 4
+        frame_end = frame_start + packet_length
+        if frame_end > len(data):
+            truncated = True
+            break
+        frame = data[frame_start:frame_end]
+        records.append(
+            {
+                "record_index": record_index,
+                "packet_length": packet_length,
+                "sof": frame[0] if len(frame) > 0 else None,
+                "packet_type": frame[1] if len(frame) > 1 else None,
+                "node_id": frame[2] if len(frame) > 2 else None,
+                "sequence_number": frame[3] if len(frame) > 3 else None,
+                "eof": frame[-1] if frame else None,
+                "truncated": False,
+            }
+        )
+        offset = frame_end
+        record_index += 1
+
+    if truncated:
+        records.append(
+            {
+                "record_index": record_index,
+                "packet_length": None,
+                "sof": None,
+                "packet_type": None,
+                "node_id": None,
+                "sequence_number": None,
+                "eof": None,
+                "truncated": True,
+            }
+        )
+    return records
 
 
 def get_csv_rows(report_name: str, limit: int = 100):
@@ -727,10 +977,12 @@ def init_db():
                     checksum TEXT NOT NULL,
                     validation_status TEXT NOT NULL,
                     validation_errors TEXT,
+                    archive_bytes BYTEA,
                     UNIQUE(gateway_id, session_name)
                 )
             """)
         )
+        conn.execute(text("ALTER TABLE archives ADD COLUMN IF NOT EXISTS archive_bytes BYTEA"))
 
         conn.execute(
             text("""
@@ -761,10 +1013,12 @@ def init_db():
                     extracted_at_utc TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     file_size_bytes BIGINT NOT NULL,
                     storage_uri TEXT NOT NULL,
-                    integrity_ok BOOLEAN NOT NULL
+                    integrity_ok BOOLEAN NOT NULL,
+                    file_bytes BYTEA
                 )
             """)
         )
+        conn.execute(text("ALTER TABLE extracted_files ADD COLUMN IF NOT EXISTS file_bytes BYTEA"))
 
         conn.execute(
             text("""
@@ -774,6 +1028,84 @@ def init_db():
                     attempted_at_utc TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     http_response_code INTEGER,
                     success BOOLEAN
+                )
+            """)
+        )
+
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS rms_records (
+                    rms_id SERIAL PRIMARY KEY,
+                    session_id INTEGER REFERENCES sessions(session_id),
+                    record_index INTEGER NOT NULL,
+                    master_count BIGINT,
+                    position_mm INTEGER,
+                    latitude DOUBLE PRECISION,
+                    longitude DOUBLE PRECISION,
+                    gps_valid BOOLEAN,
+                    valid_mask SMALLINT,
+                    al_x_mg BIGINT,
+                    al_y_mg BIGINT,
+                    al_z_mg BIGINT,
+                    ar_x_mg BIGINT,
+                    ar_y_mg BIGINT,
+                    ar_z_mg BIGINT,
+                    bg_x_mg BIGINT,
+                    bg_y_mg BIGINT,
+                    bg_z_mg BIGINT,
+                    UNIQUE(session_id, record_index)
+                )
+            """)
+        )
+
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS peak_records (
+                    peak_id SERIAL PRIMARY KEY,
+                    session_id INTEGER REFERENCES sessions(session_id),
+                    record_index INTEGER NOT NULL,
+                    window_start_mm INTEGER,
+                    window_end_mm INTEGER,
+                    speed_kmph DOUBLE PRECISION,
+                    valid_mask SMALLINT,
+                    alert_generated BOOLEAN,
+                    axis_data_json TEXT,
+                    UNIQUE(session_id, record_index)
+                )
+            """)
+        )
+
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS fault_records (
+                    fault_id SERIAL PRIMARY KEY,
+                    session_id INTEGER REFERENCES sessions(session_id),
+                    record_index INTEGER NOT NULL,
+                    timestamp_ms BIGINT,
+                    fault_code SMALLINT,
+                    node_id SMALLINT,
+                    severity SMALLINT,
+                    description TEXT,
+                    UNIQUE(session_id, record_index)
+                )
+            """)
+        )
+
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS raw_packet_records (
+                    raw_packet_id SERIAL PRIMARY KEY,
+                    session_id INTEGER REFERENCES sessions(session_id),
+                    file_relative_path TEXT NOT NULL,
+                    record_index INTEGER NOT NULL,
+                    packet_length INTEGER,
+                    sof SMALLINT,
+                    packet_type SMALLINT,
+                    node_id SMALLINT,
+                    sequence_number SMALLINT,
+                    eof SMALLINT,
+                    truncated BOOLEAN,
+                    UNIQUE(session_id, file_relative_path, record_index)
                 )
             """)
         )
@@ -961,7 +1293,8 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
                     storage_uri,
                     checksum,
                     validation_status,
-                    validation_errors
+                    validation_errors,
+                    archive_bytes
                 )
                 VALUES
                 (
@@ -974,7 +1307,8 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
                     :storage_uri,
                     :checksum,
                     :validation_status,
-                    :validation_errors
+                    :validation_errors,
+                    :archive_bytes
                 )
                 ON CONFLICT (gateway_id, session_name) DO NOTHING
                 RETURNING archive_id
@@ -990,6 +1324,7 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
                 "checksum": checksum,
                 "validation_status": validation["validation_status"],
                 "validation_errors": "; ".join(validation["validation_errors"]) or None,
+                "archive_bytes": archive_bytes,
             },
         ).fetchone()
 
@@ -1095,20 +1430,22 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
                         archive_id,
                         session_id,
                         file_relative_path,
-                        file_size_bytes,
-                        storage_uri,
-                        integrity_ok
-                    )
-                    VALUES
-                    (
+                    file_size_bytes,
+                    storage_uri,
+                    integrity_ok,
+                    file_bytes
+                )
+                VALUES
+                (
                         :archive_id,
                         :session_id,
                         :file_relative_path,
-                        :file_size_bytes,
-                        :storage_uri,
-                        :integrity_ok
-                    )
-                """),
+                    :file_size_bytes,
+                    :storage_uri,
+                    :integrity_ok,
+                    :file_bytes
+                )
+            """),
                 {
                     "archive_id": archive_id,
                     "session_id": session_id,
@@ -1116,8 +1453,109 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
                     "file_size_bytes": file_info["file_size_bytes"],
                     "storage_uri": str(extract_dir / relative_path),
                     "integrity_ok": file_info["integrity_ok"],
+                    "file_bytes": (extract_dir / relative_path).read_bytes(),
                 },
             )
+
+        if validation["validation_status"] != "quarantined":
+            for rms_record in parse_rms_records(extract_dir / "rms/rms_25cm.bin"):
+                conn.execute(
+                    text("""
+                        INSERT INTO rms_records
+                        (
+                            session_id, record_index, master_count, position_mm,
+                            latitude, longitude, gps_valid, valid_mask,
+                            al_x_mg, al_y_mg, al_z_mg,
+                            ar_x_mg, ar_y_mg, ar_z_mg,
+                            bg_x_mg, bg_y_mg, bg_z_mg
+                        )
+                        VALUES
+                        (
+                            :session_id, :record_index, :master_count, :position_mm,
+                            :latitude, :longitude, :gps_valid, :valid_mask,
+                            :al_x_mg, :al_y_mg, :al_z_mg,
+                            :ar_x_mg, :ar_y_mg, :ar_z_mg,
+                            :bg_x_mg, :bg_y_mg, :bg_z_mg
+                        )
+                        ON CONFLICT (session_id, record_index) DO NOTHING
+                    """),
+                    {"session_id": session_id, **rms_record},
+                )
+
+            for peak_record in parse_peak_records(extract_dir / "peak/peak_50m.bin"):
+                conn.execute(
+                    text("""
+                        INSERT INTO peak_records
+                        (
+                            session_id, record_index, window_start_mm, window_end_mm,
+                            speed_kmph, valid_mask, alert_generated, axis_data_json
+                        )
+                        VALUES
+                        (
+                            :session_id, :record_index, :window_start_mm, :window_end_mm,
+                            :speed_kmph, :valid_mask, :alert_generated, :axis_data_json
+                        )
+                        ON CONFLICT (session_id, record_index) DO NOTHING
+                    """),
+                    {
+                        "session_id": session_id,
+                        "record_index": peak_record["record_index"],
+                        "window_start_mm": peak_record["window_start_mm"],
+                        "window_end_mm": peak_record["window_end_mm"],
+                        "speed_kmph": peak_record["speed_kmph"],
+                        "valid_mask": peak_record["valid_mask"],
+                        "alert_generated": peak_record["alert_generated"],
+                        "axis_data_json": json.dumps(peak_record["axis_data"]),
+                    },
+                )
+
+            for fault_record in parse_fault_records(extract_dir / "faults/faults.bin"):
+                conn.execute(
+                    text("""
+                        INSERT INTO fault_records
+                        (
+                            session_id, record_index, timestamp_ms, fault_code,
+                            node_id, severity, description
+                        )
+                        VALUES
+                        (
+                            :session_id, :record_index, :timestamp_ms, :fault_code,
+                            :node_id, :severity, :description
+                        )
+                        ON CONFLICT (session_id, record_index) DO NOTHING
+                    """),
+                    {"session_id": session_id, **fault_record},
+                )
+
+            for raw_relative_path in [
+                "raw/adxl_left.bin",
+                "raw/adxl_right.bin",
+                "raw/bogie.bin",
+                "raw/encoder.bin",
+            ]:
+                for raw_record in parse_raw_packet_records(extract_dir / raw_relative_path):
+                    conn.execute(
+                        text("""
+                            INSERT INTO raw_packet_records
+                            (
+                                session_id, file_relative_path, record_index,
+                                packet_length, sof, packet_type, node_id,
+                                sequence_number, eof, truncated
+                            )
+                            VALUES
+                            (
+                                :session_id, :file_relative_path, :record_index,
+                                :packet_length, :sof, :packet_type, :node_id,
+                                :sequence_number, :eof, :truncated
+                            )
+                            ON CONFLICT (session_id, file_relative_path, record_index) DO NOTHING
+                        """),
+                        {
+                            "session_id": session_id,
+                            "file_relative_path": raw_relative_path,
+                            **raw_record,
+                        },
+                    )
 
         conn.execute(
             text("""
