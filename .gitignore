@@ -4,5 +4,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 render_check/
+uploaded_archives/
+GW_BOGIE_*.zip
 *.log
-

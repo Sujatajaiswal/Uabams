@@ -1,11 +1,17 @@
 import csv
+import hashlib
 import io
+import json
 import os
+import re
+import zipfile
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from app.database import engine
@@ -19,6 +25,24 @@ templates = Jinja2Templates(directory="app/templates")
 
 ALERT_SPEED_LIMIT_KMPH = 80
 SPATIAL_SAMPLE_DISTANCE_M = 0.25
+ARCHIVE_STORAGE_DIR = Path(os.getenv("ARCHIVE_STORAGE_DIR", "uploaded_archives"))
+SUPPORTED_SESSION_SCHEMA_VERSION = "1.0"
+SESSION_NAME_RE = re.compile(r"SESSION_\d{8}_\d{6}$")
+REQUIRED_ARCHIVE_FILES = [
+    "session_metadata.json",
+    "rms/rms_25cm.bin",
+    "peak/peak_50m.bin",
+    "faults/faults.bin",
+    "raw/adxl_left.bin",
+    "raw/adxl_right.bin",
+    "raw/bogie.bin",
+    "raw/encoder.bin",
+]
+FIXED_RECORD_SIZES = {
+    "rms/rms_25cm.bin": 66,
+    "peak/peak_50m.bin": 302,
+    "faults/faults.bin": 75,
+}
 
 CSV_REPORTS = {
     "wheel-calibration": {
@@ -108,6 +132,45 @@ CSV_REPORTS = {
             LIMIT :limit
         """,
     },
+    "archives": {
+        "title": "Session Archives",
+        "filename": "uabams_session_archives.csv",
+        "query": """
+            SELECT
+                archive_id,
+                gateway_id,
+                train_id,
+                session_name,
+                archive_name,
+                archive_size_bytes,
+                upload_received_utc,
+                storage_uri,
+                checksum,
+                validation_status
+            FROM archives
+            ORDER BY archive_id DESC
+            LIMIT :limit
+        """,
+    },
+    "cloud-alert-events": {
+        "title": "Cloud Alert Events",
+        "filename": "uabams_cloud_alert_events.csv",
+        "query": """
+            SELECT
+                alert_event_id,
+                gateway_id,
+                train_id,
+                session_name,
+                window_start_mm,
+                window_end_mm,
+                speed_kmph,
+                triggered_axes_count,
+                received_utc
+            FROM cloud_alert_events
+            ORDER BY alert_event_id DESC
+            LIMIT :limit
+        """,
+    },
 }
 
 
@@ -122,6 +185,169 @@ def database_host():
     if not database_url:
         return "Not configured"
     return urlparse(database_url).hostname or "Configured"
+
+
+def utc_now():
+    return datetime.utcnow()
+
+
+def extract_archive_filename(request: Request, filename: Optional[str]):
+    if filename:
+        return Path(filename).name
+
+    header_name = request.headers.get("x-archive-name")
+    if header_name:
+        return Path(header_name).name
+
+    content_disposition = request.headers.get("content-disposition", "")
+    match = re.search(r'filename="?([^";]+)"?', content_disposition)
+    if match:
+        return Path(match.group(1)).name
+
+    return None
+
+
+def parse_archive_filename(archive_name: str):
+    if not archive_name.endswith(".zip"):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid archive filename. Expected <gatewayId>_<trainId>_<sessionName>.zip",
+        )
+
+    stem = archive_name[:-4]
+    session_match = re.search(r"_SESSION_\d{8}_\d{6}$", stem)
+    if not session_match:
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid session name. Expected SESSION_YYYYMMDD_HHMMSS in archive filename.",
+        )
+
+    session_name = stem[session_match.start() + 1:]
+    identity_part = stem[:session_match.start()]
+
+    if "_TRAIN_" in identity_part:
+        gateway_id, train_suffix = identity_part.split("_TRAIN_", 1)
+        train_id = f"TRAIN_{train_suffix}"
+    else:
+        try:
+            gateway_id, train_id = identity_part.rsplit("_", 1)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid archive identity. Expected <gatewayId>_<trainId> before session name.",
+            ) from exc
+
+    if not gateway_id or not train_id or not SESSION_NAME_RE.match(session_name):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid archive filename. Expected <gatewayId>_<trainId>_<sessionName>.zip",
+        )
+
+    return {
+        "gateway_id": gateway_id,
+        "train_id": train_id,
+        "session_name": session_name,
+    }
+
+
+def safe_extract_zip(zip_file: zipfile.ZipFile, destination: Path):
+    destination = destination.resolve()
+    for member in zip_file.infolist():
+        target = (destination / member.filename).resolve()
+        if not str(target).startswith(str(destination)):
+            raise HTTPException(status_code=400, detail="Archive contains unsafe file paths")
+    zip_file.extractall(destination)
+
+
+def read_session_metadata(extract_dir: Path):
+    metadata_path = extract_dir / "session_metadata.json"
+    if not metadata_path.exists():
+        return None
+    try:
+        return json.loads(metadata_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid session_metadata.json: {exc}") from exc
+
+
+def validate_archive_contents(extract_dir: Path, filename_parts: dict):
+    missing_files = [
+        file_path
+        for file_path in REQUIRED_ARCHIVE_FILES
+        if not (extract_dir / file_path).exists()
+    ]
+    metadata = read_session_metadata(extract_dir)
+
+    validation_errors = []
+    validation_status = "ok"
+
+    if missing_files:
+        validation_errors.append(f"Missing files: {', '.join(missing_files)}")
+        validation_status = "incomplete"
+
+    if not metadata:
+        validation_errors.append("session_metadata.json is missing")
+        validation_status = "incomplete"
+    else:
+        if metadata.get("schemaVersion") != SUPPORTED_SESSION_SCHEMA_VERSION:
+            validation_errors.append(
+                f"Unsupported schemaVersion: {metadata.get('schemaVersion')}"
+            )
+            validation_status = "quarantined"
+
+        for meta_key, filename_key in [
+            ("gatewayId", "gateway_id"),
+            ("trainId", "train_id"),
+            ("sessionName", "session_name"),
+        ]:
+            if metadata.get(meta_key) != filename_parts[filename_key]:
+                validation_errors.append(
+                    f"{meta_key} mismatch: filename has {filename_parts[filename_key]}, metadata has {metadata.get(meta_key)}"
+                )
+                validation_status = "quarantined"
+
+        if metadata.get("sessionStatus") != "closed" and validation_status == "ok":
+            validation_errors.append("Session is not closed; marked incomplete")
+            validation_status = "incomplete"
+
+    integrity_results = []
+    for relative_path in REQUIRED_ARCHIVE_FILES:
+        file_path = extract_dir / relative_path
+        if not file_path.exists():
+            continue
+        record_size = FIXED_RECORD_SIZES.get(relative_path)
+        file_size = file_path.stat().st_size
+        integrity_ok = True
+        if record_size:
+            integrity_ok = file_size % record_size == 0
+            if not integrity_ok and validation_status == "ok":
+                validation_status = "incomplete"
+                validation_errors.append(
+                    f"{relative_path} size {file_size} is not divisible by {record_size}"
+                )
+        integrity_results.append(
+            {
+                "relative_path": relative_path,
+                "file_size_bytes": file_size,
+                "integrity_ok": integrity_ok,
+            }
+        )
+
+    return {
+        "metadata": metadata,
+        "missing_files": missing_files,
+        "validation_status": validation_status,
+        "validation_errors": validation_errors,
+        "integrity_results": integrity_results,
+    }
+
+
+def parse_created_utc(value):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return None
 
 
 def get_csv_rows(report_name: str, limit: int = 100):
@@ -288,6 +514,25 @@ class GatewayData(BaseModel):
     sample_distance_m: float = Field(default=0.25, gt=0)
 
 
+class TriggeredAxis(BaseModel):
+    axisName: str
+    peakValueMg: int
+    thresholdMg: int
+    peakPositionMm: int
+    peakLat: float
+    peakLon: float
+
+
+class CloudAlertEvent(BaseModel):
+    gatewayId: str
+    trainId: str
+    sessionName: str
+    windowStartMm: int
+    windowEndMm: int
+    speedKmph: float
+    triggeredAxes: list[TriggeredAxis]
+
+
 def init_db():
     with engine.connect() as conn:
         conn.execute(
@@ -431,6 +676,125 @@ def init_db():
                 text(f"ALTER TABLE alerts ADD COLUMN IF NOT EXISTS {column_name} {column_type}")
             )
 
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS gateways (
+                    gateway_id TEXT PRIMARY KEY,
+                    gateway_serial TEXT,
+                    firmware_version TEXT,
+                    gateway_software TEXT,
+                    first_seen_utc TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        )
+        for column_name, column_type in [
+            ("gateway_id", "TEXT"),
+            ("gateway_serial", "TEXT"),
+            ("firmware_version", "TEXT"),
+            ("gateway_software", "TEXT"),
+            ("first_seen_utc", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+        ]:
+            conn.execute(
+                text(f"ALTER TABLE gateways ADD COLUMN IF NOT EXISTS {column_name} {column_type}")
+            )
+        conn.execute(
+            text("CREATE UNIQUE INDEX IF NOT EXISTS idx_gateways_gateway_id ON gateways (gateway_id)")
+        )
+
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS trains (
+                    train_id TEXT PRIMARY KEY
+                )
+            """)
+        )
+        conn.execute(text("ALTER TABLE trains ADD COLUMN IF NOT EXISTS train_id TEXT"))
+        conn.execute(
+            text("CREATE UNIQUE INDEX IF NOT EXISTS idx_trains_train_id ON trains (train_id)")
+        )
+
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS archives (
+                    archive_id SERIAL PRIMARY KEY,
+                    gateway_id TEXT NOT NULL,
+                    train_id TEXT NOT NULL,
+                    session_name TEXT NOT NULL,
+                    archive_name TEXT NOT NULL,
+                    archive_size_bytes BIGINT NOT NULL,
+                    upload_received_utc TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    storage_uri TEXT NOT NULL,
+                    checksum TEXT NOT NULL,
+                    validation_status TEXT NOT NULL,
+                    validation_errors TEXT,
+                    UNIQUE(gateway_id, session_name)
+                )
+            """)
+        )
+
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id SERIAL PRIMARY KEY,
+                    archive_id INTEGER REFERENCES archives(archive_id),
+                    gateway_id TEXT NOT NULL,
+                    train_id TEXT NOT NULL,
+                    session_name TEXT NOT NULL,
+                    session_status TEXT,
+                    created_utc TIMESTAMP,
+                    schema_version TEXT,
+                    gateway_serial TEXT,
+                    firmware_version TEXT,
+                    gateway_software TEXT,
+                    UNIQUE(gateway_id, session_name)
+                )
+            """)
+        )
+
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS extracted_files (
+                    file_id SERIAL PRIMARY KEY,
+                    archive_id INTEGER REFERENCES archives(archive_id),
+                    session_id INTEGER REFERENCES sessions(session_id),
+                    file_relative_path TEXT NOT NULL,
+                    extracted_at_utc TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    file_size_bytes BIGINT NOT NULL,
+                    storage_uri TEXT NOT NULL,
+                    integrity_ok BOOLEAN NOT NULL
+                )
+            """)
+        )
+
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS upload_attempts (
+                    attempt_id SERIAL PRIMARY KEY,
+                    archive_id INTEGER REFERENCES archives(archive_id),
+                    attempted_at_utc TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    http_response_code INTEGER,
+                    success BOOLEAN
+                )
+            """)
+        )
+
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS cloud_alert_events (
+                    alert_event_id SERIAL PRIMARY KEY,
+                    gateway_id TEXT NOT NULL,
+                    train_id TEXT NOT NULL,
+                    session_name TEXT NOT NULL,
+                    window_start_mm INTEGER NOT NULL,
+                    window_end_mm INTEGER NOT NULL,
+                    speed_kmph DOUBLE PRECISION NOT NULL,
+                    triggered_axes_count INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    received_utc TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        )
+
         conn.commit()
 
 
@@ -502,6 +866,424 @@ def cloud_status():
         "railman_ready": True,
         "railman_export_endpoint": "/railman/export",
         "gateway_ingest_endpoint": "/api/data",
+    }
+
+
+@app.put("/api/v1/archive")
+async def upload_session_archive(request: Request, filename: Optional[str] = None):
+    init_db()
+
+    archive_name = extract_archive_filename(request, filename)
+    if not archive_name:
+        raise HTTPException(
+            status_code=422,
+            detail="Archive filename is required. Use ?filename=..., X-Archive-Name, or Content-Disposition filename.",
+        )
+
+    filename_parts = parse_archive_filename(archive_name)
+    archive_bytes = await request.body()
+    if not archive_bytes:
+        raise HTTPException(status_code=400, detail="Archive body is empty")
+
+    checksum = hashlib.sha256(archive_bytes).hexdigest()
+    archive_size = len(archive_bytes)
+    storage_root = ARCHIVE_STORAGE_DIR / checksum
+    extract_dir = storage_root / "extracted"
+    archive_path = storage_root / archive_name
+
+    storage_root.mkdir(parents=True, exist_ok=True)
+    archive_path.write_bytes(archive_bytes)
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zip_file:
+            extract_dir.mkdir(parents=True, exist_ok=True)
+            safe_extract_zip(zip_file, extract_dir)
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=400, detail="Uploaded body is not a valid ZIP archive") from exc
+
+    validation = validate_archive_contents(extract_dir, filename_parts)
+    metadata = validation["metadata"] or {}
+    upload_time = utc_now()
+    created_utc = parse_created_utc(metadata.get("createdUtc"))
+
+    with engine.connect() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO gateways
+                (
+                    gateway_id,
+                    gateway_serial,
+                    firmware_version,
+                    gateway_software,
+                    first_seen_utc
+                )
+                VALUES
+                (
+                    :gateway_id,
+                    :gateway_serial,
+                    :firmware_version,
+                    :gateway_software,
+                    :first_seen_utc
+                )
+                ON CONFLICT (gateway_id) DO UPDATE SET
+                    gateway_serial = EXCLUDED.gateway_serial,
+                    firmware_version = EXCLUDED.firmware_version,
+                    gateway_software = EXCLUDED.gateway_software
+            """),
+            {
+                "gateway_id": filename_parts["gateway_id"],
+                "gateway_serial": metadata.get("gatewaySerial"),
+                "firmware_version": metadata.get("firmwareVersion"),
+                "gateway_software": metadata.get("gatewaySoftware"),
+                "first_seen_utc": upload_time,
+            },
+        )
+
+        conn.execute(
+            text("""
+                INSERT INTO trains (train_id)
+                VALUES (:train_id)
+                ON CONFLICT (train_id) DO NOTHING
+            """),
+            {"train_id": filename_parts["train_id"]},
+        )
+
+        archive_row = conn.execute(
+            text("""
+                INSERT INTO archives
+                (
+                    gateway_id,
+                    train_id,
+                    session_name,
+                    archive_name,
+                    archive_size_bytes,
+                    upload_received_utc,
+                    storage_uri,
+                    checksum,
+                    validation_status,
+                    validation_errors
+                )
+                VALUES
+                (
+                    :gateway_id,
+                    :train_id,
+                    :session_name,
+                    :archive_name,
+                    :archive_size_bytes,
+                    :upload_received_utc,
+                    :storage_uri,
+                    :checksum,
+                    :validation_status,
+                    :validation_errors
+                )
+                ON CONFLICT (gateway_id, session_name) DO NOTHING
+                RETURNING archive_id
+            """),
+            {
+                "gateway_id": filename_parts["gateway_id"],
+                "train_id": filename_parts["train_id"],
+                "session_name": filename_parts["session_name"],
+                "archive_name": archive_name,
+                "archive_size_bytes": archive_size,
+                "upload_received_utc": upload_time,
+                "storage_uri": str(archive_path),
+                "checksum": checksum,
+                "validation_status": validation["validation_status"],
+                "validation_errors": "; ".join(validation["validation_errors"]) or None,
+            },
+        ).fetchone()
+
+        if not archive_row:
+            existing = conn.execute(
+                text("""
+                    SELECT archive_id, validation_status
+                    FROM archives
+                    WHERE gateway_id = :gateway_id
+                      AND session_name = :session_name
+                """),
+                {
+                    "gateway_id": filename_parts["gateway_id"],
+                    "session_name": filename_parts["session_name"],
+                },
+            ).fetchone()
+            conn.execute(
+                text("""
+                    INSERT INTO upload_attempts
+                    (
+                        archive_id,
+                        http_response_code,
+                        success
+                    )
+                    VALUES
+                    (
+                        :archive_id,
+                        200,
+                        TRUE
+                    )
+                """),
+                {"archive_id": existing.archive_id if existing else None},
+            )
+            conn.commit()
+            return {
+                "message": "Duplicate archive already received",
+                "archive_name": archive_name,
+                "archive_id": existing.archive_id if existing else None,
+                "validation_status": existing.validation_status if existing else "duplicate",
+                "duplicate": True,
+            }
+
+        archive_id = archive_row.archive_id
+        session_row = conn.execute(
+            text("""
+                INSERT INTO sessions
+                (
+                    archive_id,
+                    gateway_id,
+                    train_id,
+                    session_name,
+                    session_status,
+                    created_utc,
+                    schema_version,
+                    gateway_serial,
+                    firmware_version,
+                    gateway_software
+                )
+                VALUES
+                (
+                    :archive_id,
+                    :gateway_id,
+                    :train_id,
+                    :session_name,
+                    :session_status,
+                    :created_utc,
+                    :schema_version,
+                    :gateway_serial,
+                    :firmware_version,
+                    :gateway_software
+                )
+                ON CONFLICT (gateway_id, session_name) DO UPDATE SET
+                    archive_id = EXCLUDED.archive_id,
+                    session_status = EXCLUDED.session_status,
+                    created_utc = EXCLUDED.created_utc,
+                    schema_version = EXCLUDED.schema_version,
+                    gateway_serial = EXCLUDED.gateway_serial,
+                    firmware_version = EXCLUDED.firmware_version,
+                    gateway_software = EXCLUDED.gateway_software
+                RETURNING session_id
+            """),
+            {
+                "archive_id": archive_id,
+                "gateway_id": filename_parts["gateway_id"],
+                "train_id": filename_parts["train_id"],
+                "session_name": filename_parts["session_name"],
+                "session_status": metadata.get("sessionStatus"),
+                "created_utc": created_utc,
+                "schema_version": metadata.get("schemaVersion"),
+                "gateway_serial": metadata.get("gatewaySerial"),
+                "firmware_version": metadata.get("firmwareVersion"),
+                "gateway_software": metadata.get("gatewaySoftware"),
+            },
+        ).fetchone()
+        session_id = session_row.session_id
+
+        for file_info in validation["integrity_results"]:
+            relative_path = file_info["relative_path"]
+            conn.execute(
+                text("""
+                    INSERT INTO extracted_files
+                    (
+                        archive_id,
+                        session_id,
+                        file_relative_path,
+                        file_size_bytes,
+                        storage_uri,
+                        integrity_ok
+                    )
+                    VALUES
+                    (
+                        :archive_id,
+                        :session_id,
+                        :file_relative_path,
+                        :file_size_bytes,
+                        :storage_uri,
+                        :integrity_ok
+                    )
+                """),
+                {
+                    "archive_id": archive_id,
+                    "session_id": session_id,
+                    "file_relative_path": relative_path,
+                    "file_size_bytes": file_info["file_size_bytes"],
+                    "storage_uri": str(extract_dir / relative_path),
+                    "integrity_ok": file_info["integrity_ok"],
+                },
+            )
+
+        conn.execute(
+            text("""
+                INSERT INTO upload_attempts
+                (
+                    archive_id,
+                    http_response_code,
+                    success
+                )
+                VALUES
+                (
+                    :archive_id,
+                    201,
+                    TRUE
+                )
+            """),
+            {"archive_id": archive_id},
+        )
+        conn.commit()
+
+    status_code = 201 if validation["validation_status"] != "quarantined" else 422
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "message": "Archive received",
+            "archive_id": archive_id,
+            "session_id": session_id,
+            "archive_name": archive_name,
+            "gateway_id": filename_parts["gateway_id"],
+            "train_id": filename_parts["train_id"],
+            "session_name": filename_parts["session_name"],
+            "archive_size_bytes": archive_size,
+            "checksum": checksum,
+            "validation_status": validation["validation_status"],
+            "validation_errors": validation["validation_errors"],
+            "missing_files": validation["missing_files"],
+            "stored_archive": str(archive_path),
+        },
+    )
+
+
+@app.get("/api/v1/archives")
+def get_session_archives(limit: int = 50):
+    init_db()
+    safe_limit = max(1, min(limit, 500))
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT
+                    archive_id,
+                    gateway_id,
+                    train_id,
+                    session_name,
+                    archive_name,
+                    archive_size_bytes,
+                    upload_received_utc,
+                    storage_uri,
+                    checksum,
+                    validation_status,
+                    validation_errors
+                FROM archives
+                ORDER BY archive_id DESC
+                LIMIT :limit
+            """),
+            {"limit": safe_limit},
+        ).fetchall()
+
+    return [
+        {
+            "archive_id": row.archive_id,
+            "gateway_id": row.gateway_id,
+            "train_id": row.train_id,
+            "session_name": row.session_name,
+            "archive_name": row.archive_name,
+            "archive_size_bytes": row.archive_size_bytes,
+            "upload_received_utc": str(row.upload_received_utc) if row.upload_received_utc else None,
+            "storage_uri": row.storage_uri,
+            "checksum": row.checksum,
+            "validation_status": row.validation_status,
+            "validation_errors": row.validation_errors,
+        }
+        for row in rows
+    ]
+
+
+@app.get("/api/v1/archives/{archive_id}/files")
+def get_archive_files(archive_id: int):
+    init_db()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT
+                    file_relative_path,
+                    extracted_at_utc,
+                    file_size_bytes,
+                    storage_uri,
+                    integrity_ok
+                FROM extracted_files
+                WHERE archive_id = :archive_id
+                ORDER BY file_relative_path
+            """),
+            {"archive_id": archive_id},
+        ).fetchall()
+
+    return [
+        {
+            "file_relative_path": row.file_relative_path,
+            "extracted_at_utc": str(row.extracted_at_utc) if row.extracted_at_utc else None,
+            "file_size_bytes": row.file_size_bytes,
+            "storage_uri": row.storage_uri,
+            "integrity_ok": row.integrity_ok,
+        }
+        for row in rows
+    ]
+
+
+@app.post("/api/v1/alerts")
+def receive_cloud_alert_event(alert: CloudAlertEvent):
+    init_db()
+    payload = alert.model_dump()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("""
+                INSERT INTO cloud_alert_events
+                (
+                    gateway_id,
+                    train_id,
+                    session_name,
+                    window_start_mm,
+                    window_end_mm,
+                    speed_kmph,
+                    triggered_axes_count,
+                    payload_json
+                )
+                VALUES
+                (
+                    :gateway_id,
+                    :train_id,
+                    :session_name,
+                    :window_start_mm,
+                    :window_end_mm,
+                    :speed_kmph,
+                    :triggered_axes_count,
+                    :payload_json
+                )
+                RETURNING alert_event_id
+            """),
+            {
+                "gateway_id": alert.gatewayId,
+                "train_id": alert.trainId,
+                "session_name": alert.sessionName,
+                "window_start_mm": alert.windowStartMm,
+                "window_end_mm": alert.windowEndMm,
+                "speed_kmph": alert.speedKmph,
+                "triggered_axes_count": len(alert.triggeredAxes),
+                "payload_json": json.dumps(payload),
+            },
+        ).fetchone()
+        conn.commit()
+
+    return {
+        "message": "Alert event received",
+        "alert_event_id": row.alert_event_id,
+        "gateway_id": alert.gatewayId,
+        "train_id": alert.trainId,
+        "session_name": alert.sessionName,
     }
 
 

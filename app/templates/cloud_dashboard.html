@@ -32,6 +32,33 @@
     <section class="panel">
         <div class="section-title-row">
             <div>
+                <h2>Uploaded Session Archives</h2>
+                <p class="helper-text">Gateway session ZIP uploads received through PUT /api/v1/archive.</p>
+            </div>
+            <a class="nav-link" href="/csv/download/archives">Download Archives CSV</a>
+        </div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Archive ID</th>
+                        <th>Gateway</th>
+                        <th>Train</th>
+                        <th>Session</th>
+                        <th>Archive Name</th>
+                        <th>Size</th>
+                        <th>Status</th>
+                        <th>Received At</th>
+                    </tr>
+                </thead>
+                <tbody id="archives-body"></tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="panel">
+        <div class="section-title-row">
+            <div>
                 <h2>Latest Gateway Data</h2>
                 <p class="helper-text">Stored gateway records from cloud database.</p>
             </div>
@@ -118,6 +145,39 @@ async function loadCsvReports() {
     `).join("");
 }
 
+async function loadArchives() {
+    const body = document.getElementById("archives-body");
+    let rows = [];
+    try {
+        const response = await fetch("/api/v1/archives");
+        if (!response.ok) {
+            throw new Error("Archive data unavailable");
+        }
+        rows = await response.json();
+    } catch (error) {
+        body.innerHTML = `<tr><td colspan="8">Archive data unavailable. Check Render DATABASE_URL.</td></tr>`;
+        return;
+    }
+
+    if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="8">No session archives uploaded yet.</td></tr>`;
+        return;
+    }
+
+    body.innerHTML = rows.slice(0, 10).map(row => `
+        <tr>
+            <td>${row.archive_id}</td>
+            <td>${row.gateway_id}</td>
+            <td>${row.train_id}</td>
+            <td>${row.session_name}</td>
+            <td>${row.archive_name}</td>
+            <td>${row.archive_size_bytes}</td>
+            <td>${row.validation_status}</td>
+            <td>${valueOrDash(row.upload_received_utc)}</td>
+        </tr>
+    `).join("");
+}
+
 async function loadGatewayData() {
     const body = document.getElementById("gateway-body");
     let rows = [];
@@ -178,6 +238,7 @@ async function loadAlerts() {
 }
 
 loadCsvReports();
+loadArchives();
 loadGatewayData();
 loadAlerts();
 </script>
