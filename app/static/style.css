@@ -317,12 +317,32 @@ th {
     white-space: pre-wrap;
 }
 
+.alert-visual-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 16px;
+    align-items: stretch;
+}
+
+.chart-panel {
+    width: 100%;
+    min-height: 420px;
+    border: 1px solid #d7dee4;
+    border-radius: 8px;
+    background: #ffffff;
+    padding: 12px;
+}
+
 .map-panel {
     width: 100%;
     min-height: 420px;
     border: 1px solid #d7dee4;
     border-radius: 8px;
     overflow: hidden;
+}
+
+canvas {
+    max-width: 100%;
 }
 
 @media (max-width: 640px) {
@@ -338,5 +358,9 @@ th {
     .report-row {
         align-items: stretch;
         flex-direction: column;
+    }
+
+    .alert-visual-grid {
+        grid-template-columns: 1fr;
     }
 }

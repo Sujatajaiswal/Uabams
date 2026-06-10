@@ -33,7 +33,12 @@
             </div>
             <button type="button" onclick="loadAlerts(true)">Refresh Alerts</button>
         </div>
-        <div id="alert-map" class="map-panel"></div>
+        <div class="alert-visual-grid">
+            <div class="chart-panel">
+                <canvas id="alert-chart"></canvas>
+            </div>
+            <div id="alert-map" class="map-panel"></div>
+        </div>
     </section>
 
     <section class="panel">
@@ -60,6 +65,7 @@
     </section>
 </main>
 
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const speedGateKmph = 80;
@@ -68,6 +74,7 @@ const notificationButton = document.getElementById("notification-button");
 const notificationBanner = document.getElementById("alert-notification");
 let map;
 let markersLayer;
+let alertChart;
 
 function initMap() {
     map = L.map("alert-map").setView(defaultCenter, 13);
@@ -76,6 +83,69 @@ function initMap() {
         attribution: "&copy; OpenStreetMap contributors"
     }).addTo(map);
     markersLayer = L.layerGroup().addTo(map);
+}
+
+function initChart() {
+    const context = document.getElementById("alert-chart").getContext("2d");
+    alertChart = new Chart(context, {
+        type: "bar",
+        data: {
+            labels: [],
+            datasets: [
+                {
+                    type: "bar",
+                    label: "Peak mg",
+                    data: [],
+                    backgroundColor: "#c2410c",
+                    borderRadius: 4
+                },
+                {
+                    type: "line",
+                    label: "Threshold mg",
+                    data: [],
+                    borderColor: "#16636b",
+                    backgroundColor: "#16636b",
+                    borderWidth: 2,
+                    pointRadius: 4,
+                    tension: 0.25
+                },
+                {
+                    type: "line",
+                    label: "Speed kmph",
+                    data: [],
+                    borderColor: "#7a5a00",
+                    backgroundColor: "#7a5a00",
+                    borderDash: [6, 4],
+                    borderWidth: 2,
+                    pointRadius: 3,
+                    yAxisID: "speed"
+                }
+            ]
+        },
+        options: {
+            maintainAspectRatio: false,
+            responsive: true,
+            plugins: {
+                legend: { position: "bottom" },
+                tooltip: { mode: "index", intersect: false }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    title: { display: true, text: "Acceleration peak (mg)" }
+                },
+                speed: {
+                    beginAtZero: true,
+                    position: "right",
+                    grid: { drawOnChartArea: false },
+                    title: { display: true, text: "Speed (kmph)" }
+                },
+                x: {
+                    ticks: { maxRotation: 0, autoSkip: false }
+                }
+            }
+        }
+    });
 }
 
 function formatNumber(value, digits = 2) {
@@ -195,6 +265,19 @@ function renderMap(alerts) {
     }
 }
 
+function renderChart(alerts) {
+    const chartAlerts = alerts
+        .filter(alert => Number.isFinite(Number(alert.peak)) || Number.isFinite(Number(alert.threshold)))
+        .slice(0, 10)
+        .reverse();
+
+    alertChart.data.labels = chartAlerts.map(alert => axisLabel(alert.axis));
+    alertChart.data.datasets[0].data = chartAlerts.map(alert => Number(alert.peak || 0));
+    alertChart.data.datasets[1].data = chartAlerts.map(alert => Number(alert.threshold || 0));
+    alertChart.data.datasets[2].data = chartAlerts.map(alert => Number(alert.speed || 0));
+    alertChart.update();
+}
+
 function showLatestNotification(alerts, force = false) {
     const latest = alerts.find(alert => Number(alert.speed) >= speedGateKmph);
     if (!latest) {
@@ -219,6 +302,7 @@ function showLatestNotification(alerts, force = false) {
 async function loadAlerts(forceNotification = false) {
     const alerts = await fetchAlerts();
     renderTable(alerts);
+    renderChart(alerts);
     renderMap(alerts);
     showLatestNotification(alerts, forceNotification);
 }
@@ -235,6 +319,7 @@ notificationButton.addEventListener("click", async () => {
 });
 
 initMap();
+initChart();
 loadAlerts();
 setInterval(loadAlerts, 10000);
 </script>
