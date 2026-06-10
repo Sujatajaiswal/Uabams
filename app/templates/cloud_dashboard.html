@@ -56,6 +56,39 @@
     </section>
 
     <section class="panel">
+        <h2>Cloud Data Contract</h2>
+        <p class="helper-text">
+            This cloud service receives complete gateway session archives, validates and parses the files, stores both raw and processed data, and returns HTTP status responses to the gateway.
+        </p>
+        <div class="report-list">
+            <article class="report-row">
+                <div>
+                    <strong>Server Receives</strong>
+                    <small>HTTP PUT /api/v1/archive with raw ZIP bytes named &lt;gatewayId&gt;__&lt;trainId&gt;__&lt;sessionName&gt;.zip, plus optional POST /api/v1/alerts JSON alert events.</small>
+                </div>
+            </article>
+            <article class="report-row">
+                <div>
+                    <strong>Server Processes</strong>
+                    <small>session_metadata.json, rms/rms_25cm.bin, peak/peak_50m.bin, faults/faults.bin, and raw/*.bin files. RMS is parsed per about 25 cm segment; peak records are parsed per 50 m window.</small>
+                </div>
+            </article>
+            <article class="report-row">
+                <div>
+                    <strong>Server Stores</strong>
+                    <small>Original ZIP, extracted binary files, archive metadata, sessions, RMS records, peak records, fault records, raw packet metadata, and alert events in PostgreSQL.</small>
+                </div>
+            </article>
+            <article class="report-row">
+                <div>
+                    <strong>Server Sends Back</strong>
+                    <small>HTTP 201/200 after successful durable storage, HTTP 200 for duplicate archive, HTTP 422 for filename/metadata mismatch, and HTTP 4xx/5xx for upload or server errors.</small>
+                </div>
+            </article>
+        </div>
+    </section>
+
+    <section class="panel">
         <div class="section-title-row">
             <div>
                 <h2>CSV Downloads</h2>
