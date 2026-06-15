@@ -1179,29 +1179,27 @@ def cloud_status():
         return {
             "api_status": "running",
             "database_status": "disconnected",
-            "cloud_database": "Render PostgreSQL",
+            "cloud_database": "PostgreSQL",
             "database_host": database_host(),
             "database_error": str(exc.orig) if getattr(exc, "orig", None) else str(exc),
             "required_tables": required_tables,
             "available_tables": [],
             "schema_ready": False,
-            "railman_ready": False,
-            "railman_export_endpoint": "/railman/export",
-            "gateway_ingest_endpoint": "/api/data",
+            "gateway_archive_endpoint": "/api/v1/archive",
+            "alert_endpoint": "/api/v1/alerts",
         }
 
     return {
         "api_status": "running",
         "database_status": "connected",
-        "cloud_database": "Render PostgreSQL",
+        "cloud_database": "PostgreSQL",
         "database_host": database_host(),
         "database_time": str(database_time),
         "required_tables": required_tables,
         "available_tables": available_tables,
         "schema_ready": set(required_tables).issubset(set(available_tables)),
-        "railman_ready": True,
-        "railman_export_endpoint": "/railman/export",
-        "gateway_ingest_endpoint": "/api/data",
+        "gateway_archive_endpoint": "/api/v1/archive",
+        "alert_endpoint": "/api/v1/alerts",
     }
 
 
@@ -1335,7 +1333,7 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
         if not archive_row:
             existing = conn.execute(
                 text("""
-                    SELECT archive_id, validation_status
+                    SELECT archive_id, validation_status, validation_errors
                     FROM archives
                     WHERE gateway_id = :gateway_id
                       AND session_name = :session_name
@@ -1345,6 +1343,45 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
                     "session_name": filename_parts["session_name"],
                 },
             ).fetchone()
+
+            existing_status = existing.validation_status if existing else "duplicate"
+            if existing_status == "quarantined":
+                conn.execute(
+                    text("""
+                        INSERT INTO upload_attempts
+                        (
+                            archive_id,
+                            http_response_code,
+                            success
+                        )
+                        VALUES
+                        (
+                            :archive_id,
+                            422,
+                            FALSE
+                        )
+                    """),
+                    {"archive_id": existing.archive_id if existing else None},
+                )
+                conn.commit()
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "status": "error",
+                        "message": "Archive was previously quarantined and must not be acknowledged as successful",
+                        "errorCode": "ARCHIVE_QUARANTINED",
+                        "archiveId": existing.archive_id if existing else None,
+                        "archiveName": archive_name,
+                        "archive_name": archive_name,
+                        "gatewayId": filename_parts["gateway_id"],
+                        "trainId": filename_parts["train_id"],
+                        "sessionName": filename_parts["session_name"],
+                        "validationStatus": existing_status,
+                        "validation_status": existing_status,
+                        "validationErrors": existing.validation_errors if existing else None,
+                    },
+                )
+
             conn.execute(
                 text("""
                     INSERT INTO upload_attempts
@@ -1364,10 +1401,17 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
             )
             conn.commit()
             return {
+                "status": "success",
                 "message": "Duplicate archive already received",
+                "archiveId": existing.archive_id if existing else None,
                 "archive_name": archive_name,
+                "archiveName": archive_name,
                 "archive_id": existing.archive_id if existing else None,
-                "validation_status": existing.validation_status if existing else "duplicate",
+                "gatewayId": filename_parts["gateway_id"],
+                "trainId": filename_parts["train_id"],
+                "sessionName": filename_parts["session_name"],
+                "validationStatus": existing_status,
+                "validation_status": existing_status,
                 "duplicate": True,
             }
 
@@ -1622,18 +1666,30 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
     return JSONResponse(
         status_code=status_code,
         content={
+            "status": "success" if status_code == 201 else "error",
             "message": "Archive received",
+            "archiveId": archive_id,
+            "sessionId": session_id,
             "archive_id": archive_id,
             "session_id": session_id,
+            "archiveName": archive_name,
             "archive_name": archive_name,
+            "gatewayId": filename_parts["gateway_id"],
             "gateway_id": filename_parts["gateway_id"],
+            "trainId": filename_parts["train_id"],
             "train_id": filename_parts["train_id"],
+            "sessionName": filename_parts["session_name"],
             "session_name": filename_parts["session_name"],
+            "archiveSizeBytes": archive_size,
             "archive_size_bytes": archive_size,
             "checksum": checksum,
+            "validationStatus": validation["validation_status"],
             "validation_status": validation["validation_status"],
+            "validationErrors": validation["validation_errors"],
             "validation_errors": validation["validation_errors"],
+            "missingFiles": validation["missing_files"],
             "missing_files": validation["missing_files"],
+            "storedArchive": str(archive_path),
             "stored_archive": str(archive_path),
         },
     )
@@ -2087,7 +2143,7 @@ def get_wheel_calibration():
         return data
 
 
-@app.post("/api/data")
+@app.post("/api/data", include_in_schema=False)
 def receive_gateway_data(data: GatewayData):
 
     with engine.connect() as conn:
@@ -2304,7 +2360,7 @@ def receive_gateway_data(data: GatewayData):
 # Get Gateway Data
 # =====================================
 
-@app.get("/api/data")
+@app.get("/api/data", include_in_schema=False)
 def get_gateway_data():
 
     with engine.connect() as conn:
@@ -2392,8 +2448,8 @@ def get_alerts():
         return data
 
 
-@app.get("/railman/export")
-def railman_export(limit: int = 100):
+@app.get("/cloud/export")
+def cloud_export(limit: int = 100):
     with engine.connect() as conn:
         gateway_rows = conn.execute(
             text("""
@@ -2465,9 +2521,9 @@ def railman_export(limit: int = 100):
 
     return {
         "system": "UABAMS",
-        "target_integration": "RailMAN / railway cloud handoff",
+        "target_integration": "production cloud handoff",
         "payload_version": "1.0",
-        "cloud_database": "Render PostgreSQL",
+        "cloud_database": "PostgreSQL",
         "gateway_records": gateway_records,
         "alert_records": alert_records,
     }
@@ -2497,7 +2553,7 @@ def csv_preview(report_name: str, limit: int = 20):
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=503,
-            detail=f"Database unavailable. Check Render DATABASE_URL. {exc.orig if getattr(exc, 'orig', None) else exc}",
+            detail=f"Database unavailable. Check DATABASE_URL. {exc.orig if getattr(exc, 'orig', None) else exc}",
         ) from exc
     return {
         "name": report_name,
@@ -2515,7 +2571,7 @@ def csv_download(report_name: str, limit: int = 5000):
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=503,
-            detail=f"Database unavailable. Check Render DATABASE_URL. {exc.orig if getattr(exc, 'orig', None) else exc}",
+            detail=f"Database unavailable. Check DATABASE_URL. {exc.orig if getattr(exc, 'orig', None) else exc}",
         ) from exc
 
 

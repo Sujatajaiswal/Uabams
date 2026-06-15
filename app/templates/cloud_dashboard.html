@@ -38,7 +38,7 @@
             </div>
             <div class="status-item">
                 <span>Database</span>
-                <strong>Render PostgreSQL</strong>
+                <strong>PostgreSQL Cloud Database</strong>
             </div>
         </div>
         <form id="archive-upload-form" class="form-grid" style="margin-top: 16px;">
@@ -76,7 +76,7 @@
             <article class="report-row">
                 <div>
                     <strong>Server Stores</strong>
-                    <small>Original ZIP, extracted binary files, archive metadata, sessions, RMS records, peak records, fault records, raw packet metadata, and alert events in PostgreSQL.</small>
+                    <small>Original ZIP, extracted binary files, archive metadata, sessions, RMS records, peak records, fault records, raw packet metadata, and alert events in the PostgreSQL cloud database.</small>
                 </div>
             </article>
             <article class="report-row">
@@ -368,7 +368,7 @@ async function loadTable(reportName, bodyId, columns, emptyMessage) {
             <tr>${columns.map(column => `<td>${column(row)}</td>`).join("")}</tr>
         `).join("");
     } catch (error) {
-        body.innerHTML = `<tr><td colspan="${columns.length}">Data unavailable. Check Render DATABASE_URL.</td></tr>`;
+        body.innerHTML = `<tr><td colspan="${columns.length}">Data unavailable. Check DATABASE_URL.</td></tr>`;
     }
 }
 
