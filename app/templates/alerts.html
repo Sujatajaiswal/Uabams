@@ -159,8 +159,42 @@ function axisLabel(axis) {
     return (axis || "-").replaceAll("_", " ").toUpperCase();
 }
 
+function axisGroup(axisName, alertType) {
+    if (alertType === "VERTICAL" || alertType === "LATERAL") {
+        return alertType;
+    }
+    const normalized = String(axisName || "").toLowerCase();
+    if (normalized.endsWith("_z")) {
+        return "VERTICAL";
+    }
+    if (normalized.endsWith("_x") || normalized.endsWith("_y")) {
+        return "LATERAL";
+    }
+    return "";
+}
+
+function highestVerticalAndLateralAxes(axes) {
+    const highest = {};
+    axes.forEach(axis => {
+        const group = axisGroup(axis.axisName, axis.alertType);
+        const peak = Number(axis.peakValueMg);
+        const threshold = Number(axis.thresholdMg);
+        if (!group || !Number.isFinite(peak) || !Number.isFinite(threshold) || peak <= threshold) {
+            return;
+        }
+        const current = highest[group];
+        if (!current || Math.abs(peak) > Math.abs(Number(current.peakValueMg || 0))) {
+            highest[group] = { ...axis, alertType: group };
+        }
+    });
+    return ["VERTICAL", "LATERAL"].filter(group => highest[group]).map(group => highest[group]);
+}
+
 function normalizeCloudAlert(row) {
-    const axes = row.triggered_axes && row.triggered_axes.length ? row.triggered_axes : [{}];
+    const axes = highestVerticalAndLateralAxes(row.triggered_axes || []);
+    if (!axes.length) {
+        return [];
+    }
     return axes.map(axis => ({
         id: row.alert_event_id,
         gateway: row.gateway_id,
@@ -168,7 +202,7 @@ function normalizeCloudAlert(row) {
         session: row.session_name,
         window: `${row.window_start_mm} - ${row.window_end_mm} mm`,
         speed: row.speed_kmph,
-        axis: axis.axisName || "-",
+        axis: axis.axisName || axis.alertType || "-",
         peak: axis.peakValueMg,
         threshold: axis.thresholdMg,
         latitude: axis.peakLat ?? row.latitude,
