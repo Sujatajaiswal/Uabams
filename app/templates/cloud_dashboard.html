@@ -106,13 +106,25 @@
             <article class="report-row">
                 <div>
                     <strong>Processed Peak Data</strong>
-                    <small>Peak records are parsed from peak/peak_50m.bin and summarized per 50 m window for alert reporting.</small>
+                    <small>Peak records are parsed from peak/peak_50m.bin and summarized per 50 m window. If multiple peaks cross limits in the same window, the cloud keeps the highest vertical and highest lateral peak separately.</small>
+                </div>
+            </article>
+            <article class="report-row">
+                <div>
+                    <strong>GPS Alert Location</strong>
+                    <small>Safety alerts store measured peak value, speed, peak position, latitude, and longitude so the alert can be shown on the map and sent as notification data.</small>
+                </div>
+            </article>
+            <article class="report-row">
+                <div>
+                    <strong>Route-wise Thresholds</strong>
+                    <small>Vertical and lateral acceleration limits can be edited per route from 0 to 100g. Archive alert checks use the active route threshold where available.</small>
                 </div>
             </article>
             <article class="report-row">
                 <div>
                     <strong>Network/GSM Retry Model</strong>
-                    <small>If network transfer is unavailable, the gateway keeps local session archives and retries. Cloud returns 200/201 only after accepting the archive.</small>
+                    <small>If GSM/network transfer is unavailable, the gateway keeps local session archives and retries later. Cloud returns 200/201 only after accepting the archive, so the gateway can safely clear local storage after confirmation.</small>
                 </div>
             </article>
             <article class="report-row">

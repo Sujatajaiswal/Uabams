@@ -51,6 +51,17 @@ PEAK_AXIS_THRESHOLDS_MG = {
     "bg_y": 4000,
     "bg_z": 6000,
 }
+AXIS_ALERT_GROUPS = {
+    "al_x": "LATERAL",
+    "al_y": "LATERAL",
+    "al_z": "VERTICAL",
+    "ar_x": "LATERAL",
+    "ar_y": "LATERAL",
+    "ar_z": "VERTICAL",
+    "bg_x": "LATERAL",
+    "bg_y": "LATERAL",
+    "bg_z": "VERTICAL",
+}
 ARCHIVE_STORAGE_DIR = Path(os.getenv("ARCHIVE_STORAGE_DIR", "uploaded_archives"))
 SUPPORTED_SESSION_SCHEMA_VERSION = "1.0"
 SESSION_NAME_RE = re.compile(r"SESSION_\d{8}_\d{6}$")
@@ -243,7 +254,8 @@ Specification alignment:
 - MDB is the preferred final TMS transfer format in the specification. Actual MDB file generation requires a Microsoft Access/ODBC-compatible writer in the target CRIS/vendor environment. This package keeps the data open and documented so it can be imported into MDB/TMS.
 - Spatial acceleration data uses the 25 cm sampling interval requirement.
 - Processed peak data is summarized per 50 m window.
-- Alert events are speed-gated at 80 kmph and contain measured value plus GPS location.
+- Alert events are speed-gated at 80 kmph and contain measured value plus GPS latitude/longitude for map and notification output.
+- If multiple peaks exceed the configured limits in one 50 m window, the cloud keeps the highest vertical peak and highest lateral peak separately.
 - Gateway can retain session archives during network/GSM unavailability and retry upload. Cloud returns HTTP 200/201 only after accepting the data so the gateway can clear local storage.
 - Speed measurement band documented for the system is 20-160 kmph.
 - Axle box acceleration measurement range is documented as +/-100g; bogie level range is documented as +/-5g.
@@ -251,7 +263,7 @@ Specification alignment:
 - Peak location accuracy requirement is better than 5 m. Cloud stores peak latitude/longitude and peak position for map/report output.
 - Speed measurement accuracy requirement is +/-2% of actual speed. Cloud stores original and corrected speed values where available.
 - Discrete time-domain/raw data retention requirement is 7 days. Spatial acceleration data and alert reports retention requirement is 30 days at the processing station.
-- Processing station should scale for up to 100 train systems and route-wise threshold limits.
+- Processing station should scale for up to 100 train systems and route-wise threshold limits from 0 to 100g.
 - Data transfer should use suitable encryption; production deployment should use HTTPS/private APN or equivalent secure network.
 
 Included TMS data files:
@@ -522,7 +534,67 @@ def parse_peak_records(file_path: Path):
     return records
 
 
-def build_alert_event_from_peak_record(metadata: dict, peak_record: dict):
+def axis_alert_group(axis_name: str):
+    return AXIS_ALERT_GROUPS.get(axis_name)
+
+
+def axis_threshold_mg(axis_name: str, route_thresholds: Optional[dict] = None):
+    alert_group = axis_alert_group(axis_name)
+    if route_thresholds and alert_group == "VERTICAL":
+        return int(round(route_thresholds["vertical_threshold"] * 1000))
+    if route_thresholds and alert_group == "LATERAL":
+        return int(round(route_thresholds["lateral_threshold"] * 1000))
+    return PEAK_AXIS_THRESHOLDS_MG.get(axis_name)
+
+
+def pick_highest_vertical_and_lateral_axes(triggered_axes: list[dict]):
+    highest_by_group = {}
+    for axis in triggered_axes:
+        alert_group = axis.get("alertType") or axis_alert_group(axis.get("axisName", ""))
+        if alert_group not in {"VERTICAL", "LATERAL"}:
+            continue
+        axis["alertType"] = alert_group
+        current = highest_by_group.get(alert_group)
+        if current is None or abs(axis.get("peakValueMg") or 0) > abs(current.get("peakValueMg") or 0):
+            highest_by_group[alert_group] = axis
+    return [
+        highest_by_group[group]
+        for group in ("VERTICAL", "LATERAL")
+        if group in highest_by_group
+    ]
+
+
+def get_latest_route_thresholds(conn, route_name: str = "DEFAULT"):
+    row = conn.execute(
+        text("""
+            SELECT route_name, vertical_threshold, lateral_threshold
+            FROM thresholds
+            WHERE route_name = :route_name
+            ORDER BY id DESC
+            LIMIT 1
+        """),
+        {"route_name": route_name or "DEFAULT"},
+    ).fetchone()
+    if not row and route_name != "DEFAULT":
+        row = conn.execute(
+            text("""
+                SELECT route_name, vertical_threshold, lateral_threshold
+                FROM thresholds
+                WHERE route_name = 'DEFAULT'
+                ORDER BY id DESC
+                LIMIT 1
+            """)
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "route_name": row.route_name,
+        "vertical_threshold": float(row.vertical_threshold),
+        "lateral_threshold": float(row.lateral_threshold),
+    }
+
+
+def build_alert_event_from_peak_record(metadata: dict, peak_record: dict, route_thresholds: Optional[dict] = None):
     if not peak_record.get("alert_generated"):
         return None
     if peak_record.get("speed_kmph", 0) < ALERT_SPEED_LIMIT_KMPH:
@@ -530,7 +602,7 @@ def build_alert_event_from_peak_record(metadata: dict, peak_record: dict):
 
     triggered_axes = []
     for axis_name, axis in peak_record.get("axis_data", {}).items():
-        threshold_mg = PEAK_AXIS_THRESHOLDS_MG.get(axis_name)
+        threshold_mg = axis_threshold_mg(axis_name, route_thresholds)
         peak_value_mg = axis.get("peak_value_mg")
         if threshold_mg is None or peak_value_mg in (None, 0xFFFFFFFF):
             continue
@@ -538,6 +610,7 @@ def build_alert_event_from_peak_record(metadata: dict, peak_record: dict):
             triggered_axes.append(
                 {
                     "axisName": axis_name,
+                    "alertType": axis_alert_group(axis_name),
                     "peakValueMg": peak_value_mg,
                     "thresholdMg": threshold_mg,
                     "peakPositionMm": axis.get("peak_position_mm"),
@@ -546,24 +619,7 @@ def build_alert_event_from_peak_record(metadata: dict, peak_record: dict):
                 }
             )
 
-    if not triggered_axes:
-        candidate_axes = [
-            (axis_name, axis)
-            for axis_name, axis in peak_record.get("axis_data", {}).items()
-            if axis.get("peak_value_mg") not in (None, 0xFFFFFFFF)
-        ]
-        if candidate_axes:
-            axis_name, axis = max(candidate_axes, key=lambda item: item[1].get("peak_value_mg") or 0)
-            triggered_axes.append(
-                {
-                    "axisName": axis_name,
-                    "peakValueMg": axis.get("peak_value_mg"),
-                    "thresholdMg": PEAK_AXIS_THRESHOLDS_MG.get(axis_name, 0),
-                    "peakPositionMm": axis.get("peak_position_mm"),
-                    "peakLat": axis.get("peak_lat"),
-                    "peakLon": axis.get("peak_lon"),
-                }
-            )
+    triggered_axes = pick_highest_vertical_and_lateral_axes(triggered_axes)
 
     if not triggered_axes:
         return None
@@ -572,6 +628,7 @@ def build_alert_event_from_peak_record(metadata: dict, peak_record: dict):
         "gatewayId": metadata["gatewayId"],
         "trainId": metadata["trainId"],
         "sessionName": metadata["sessionName"],
+        "routeName": metadata.get("routeName") or (route_thresholds or {}).get("route_name") or "DEFAULT",
         "windowStartMm": peak_record["window_start_mm"],
         "windowEndMm": peak_record["window_end_mm"],
         "speedKmph": peak_record["speed_kmph"],
@@ -933,6 +990,7 @@ class GatewayData(BaseModel):
 
 class TriggeredAxis(BaseModel):
     axisName: str
+    alertType: Optional[str] = None
     peakValueMg: int
     thresholdMg: int
     peakPositionMm: int
@@ -944,6 +1002,7 @@ class CloudAlertEvent(BaseModel):
     gatewayId: str
     trainId: str
     sessionName: str
+    routeName: str = "DEFAULT"
     windowStartMm: int
     windowEndMm: int
     speedKmph: float
@@ -1695,6 +1754,8 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
             )
 
         if validation["validation_status"] != "quarantined":
+            route_name = metadata.get("routeName") or metadata.get("route_name") or "DEFAULT"
+            route_thresholds = get_latest_route_thresholds(conn, route_name)
             for rms_record in parse_rms_records(extract_dir / "rms/rms_25cm.bin"):
                 conn.execute(
                     text("""
@@ -1745,7 +1806,7 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
                         "axis_data_json": json.dumps(peak_record["axis_data"]),
                     },
                 )
-                alert_payload = build_alert_event_from_peak_record(metadata, peak_record)
+                alert_payload = build_alert_event_from_peak_record(metadata, peak_record, route_thresholds)
                 if alert_payload:
                     conn.execute(
                         text("""
@@ -1990,6 +2051,24 @@ def get_cloud_alert_events(limit: int = 50):
 def receive_cloud_alert_event(alert: CloudAlertEvent):
     init_db()
     payload = alert.model_dump()
+    if alert.speedKmph < ALERT_SPEED_LIMIT_KMPH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Alert speed must be at least {ALERT_SPEED_LIMIT_KMPH} kmph",
+        )
+
+    triggered_axes = pick_highest_vertical_and_lateral_axes([
+        axis.model_dump()
+        for axis in alert.triggeredAxes
+        if axis.peakValueMg > axis.thresholdMg
+    ])
+    if not triggered_axes:
+        raise HTTPException(
+            status_code=422,
+            detail="No vertical or lateral axis crossed the configured threshold",
+        )
+
+    payload["triggeredAxes"] = triggered_axes
     with engine.connect() as conn:
         row = conn.execute(
             text("""
@@ -2024,7 +2103,7 @@ def receive_cloud_alert_event(alert: CloudAlertEvent):
                 "window_start_mm": alert.windowStartMm,
                 "window_end_mm": alert.windowEndMm,
                 "speed_kmph": alert.speedKmph,
-                "triggered_axes_count": len(alert.triggeredAxes),
+                "triggered_axes_count": len(triggered_axes),
                 "payload_json": json.dumps(payload),
             },
         ).fetchone()
