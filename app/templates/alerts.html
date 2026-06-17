@@ -312,6 +312,13 @@ function renderChart(alerts) {
     alertChart.update();
 }
 
+function buildAlertMessage(alert) {
+    const gpsText = Number.isFinite(Number(alert.latitude)) && Number.isFinite(Number(alert.longitude))
+        ? `GPS ${formatNumber(alert.latitude, 6)}, ${formatNumber(alert.longitude, 6)}`
+        : "GPS unavailable";
+    return `${axisLabel(alert.axis)} alert on ${alert.train || "train"} | Peak ${formatNumber(alert.peak, 0)} mg > ${formatNumber(alert.threshold, 0)} mg | Speed ${formatNumber(alert.speed)} kmph | ${gpsText}`;
+}
+
 function showLatestNotification(alerts, force = false) {
     const latest = alerts.find(alert => Number(alert.speed) >= speedGateKmph);
     if (!latest) {
@@ -320,7 +327,7 @@ function showLatestNotification(alerts, force = false) {
         return;
     }
 
-    const message = `${axisLabel(latest.axis)} alert on ${latest.train || "train"} at ${formatNumber(latest.speed)} kmph`;
+    const message = buildAlertMessage(latest);
     notificationBanner.textContent = message;
     notificationBanner.classList.add("is-active");
 
