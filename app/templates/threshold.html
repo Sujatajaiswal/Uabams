@@ -16,10 +16,18 @@
     </header>
 
     <section class="panel">
+        <div class="section-title-row">
+            <div>
+                <h2>Set Route-wise Acceleration Threshold</h2>
+                <p class="helper-text">
+                    Purchaser-defined limits can be edited route wise from 0 to 100g. Safety alerts are generated only when speed is at least 80 kmph and the measured vertical or lateral acceleration crosses the active route threshold.
+                </p>
+            </div>
+        </div>
         <form id="threshold-form" class="form-grid">
             <label>Route Name<input name="route_name" value="DEFAULT" required></label>
-            <label>Vertical Threshold (g)<input name="vertical_threshold" type="number" min="0" max="100" step="0.1" value="50" required></label>
-            <label>Lateral Threshold (g)<input name="lateral_threshold" type="number" min="0" max="100" step="0.1" value="80" required></label>
+            <label>Vertical Threshold (g)<input name="vertical_threshold" type="number" min="0" max="100" step="0.01" value="50" required></label>
+            <label>Lateral Threshold (g)<input name="lateral_threshold" type="number" min="0" max="100" step="0.01" value="80" required></label>
             <button type="submit">Save Threshold</button>
         </form>
         <p id="message" class="message"></p>
@@ -38,7 +46,7 @@ async function loadThreshold() {
     const row = await response.json();
     document.getElementById("threshold-current").innerHTML = row.vertical_threshold === undefined
         ? "<span>No threshold configured</span>"
-        : `<span>Route: <strong>${row.route_name}</strong></span><span>Vertical: <strong>${Number(row.vertical_threshold).toFixed(1)}g</strong></span><span>Lateral: <strong>${Number(row.lateral_threshold).toFixed(1)}g</strong></span>`;
+        : `<span>Route: <strong>${row.route_name}</strong></span><span>Vertical: <strong>${Number(row.vertical_threshold).toFixed(2)}g</strong></span><span>Lateral: <strong>${Number(row.lateral_threshold).toFixed(2)}g</strong></span><span>Alert speed gate: <strong>80 kmph</strong></span>`;
 }
 
 document.getElementById("threshold-form").addEventListener("submit", async event => {

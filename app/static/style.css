@@ -142,7 +142,8 @@ label {
     font-weight: 700;
 }
 
-input {
+input,
+select {
     width: 100%;
     min-height: 42px;
     border: 1px solid #cbd4dc;

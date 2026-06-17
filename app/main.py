@@ -2296,6 +2296,11 @@ def save_wheel_calibration(calibration: WheelCalibration):
             status_code=400,
             detail="Provide current_wheel_diameter_mm or wheel_diameter_mm"
         )
+    if current_diameter > calibration.new_wheel_diameter_mm:
+        raise HTTPException(
+            status_code=422,
+            detail="Current wheel diameter cannot be greater than new wheel diameter"
+        )
 
     circumference_mm = 3.141592653589793 * current_diameter
     distance_per_pulse_mm = circumference_mm / calibration.encoder_pulses_per_rev
