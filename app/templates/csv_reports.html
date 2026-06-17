@@ -44,9 +44,13 @@
                 <small>Includes spatial acceleration data, processed peak data, MDB import instructions, schema, and manifest.</small>
             </div>
             <div class="report-actions">
+                <button type="button" onclick="downloadActualMdb()">Download Actual MDB</button>
                 <a class="nav-link" href="/tms/package">Download MDB Handoff Package</a>
             </div>
         </div>
+        <p class="helper-text">
+            Actual MDB download works on a Windows export environment with Microsoft Access Database Engine/Jet/ACE support. On Linux cloud hosting, use the MDB handoff package.
+        </p>
     </section>
 
     <section class="panel">
@@ -142,6 +146,27 @@ async function loadReports() {
     if (reports.length) {
         previewReport(reports[0].name);
     }
+}
+
+async function downloadActualMdb() {
+    message.textContent = "Requesting actual MDB file...";
+    const response = await fetch("/tms/mdb");
+    if (response.ok) {
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "uabams_tms_transfer.mdb";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        message.textContent = "MDB file generated successfully.";
+        return;
+    }
+
+    const error = await response.json();
+    message.textContent = error.detail || "Actual MDB generation is not available in this environment.";
 }
 
 async function previewReport(name) {

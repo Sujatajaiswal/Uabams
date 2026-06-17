@@ -735,6 +735,77 @@ def build_csv_response(report_name: str, limit: int = 100):
     )
 
 
+def mdb_column_type(value):
+    if isinstance(value, bool):
+        return "YESNO"
+    if isinstance(value, int):
+        return "LONG"
+    if isinstance(value, float):
+        return "DOUBLE"
+    if isinstance(value, datetime):
+        return "DATETIME"
+    return "TEXT(255)"
+
+
+def mdb_sql_value(value):
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, datetime):
+        return f"#{value:%Y-%m-%d %H:%M:%S}#"
+    return "'" + str(value).replace("'", "''")[:255] + "'"
+
+
+def create_mdb_with_windows_ado(rows_by_table: dict, output_path: Path):
+    try:
+        import win32com.client  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "Microsoft Access MDB generation requires Windows with pywin32 and Microsoft Jet/ACE/ADOX installed."
+        ) from exc
+
+    if os.name != "nt":
+        raise RuntimeError("Microsoft Access MDB generation is only available on Windows/Access environments.")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        output_path.unlink()
+
+    connection_string = (
+        f"Provider=Microsoft.Jet.OLEDB.4.0;Data Source={output_path};"
+    )
+
+    catalog = win32com.client.Dispatch("ADOX.Catalog")
+    catalog.Create(connection_string)
+
+    connection = win32com.client.Dispatch("ADODB.Connection")
+    connection.Open(connection_string)
+    try:
+        for table_name, rows in rows_by_table.items():
+            if rows:
+                columns = list(rows[0].keys())
+                sample = rows[0]
+            else:
+                source_report = "rms-records" if table_name == "SpatialAccelerationData" else "peak-records"
+                columns = csv_fieldnames(CSV_REPORTS[source_report], [])
+                sample = {}
+
+            column_defs = []
+            for column in columns:
+                column_defs.append(f"[{column}] {mdb_column_type(sample.get(column))}")
+            connection.Execute(f"CREATE TABLE [{table_name}] ({', '.join(column_defs)})")
+
+            for row in rows:
+                values = ", ".join(mdb_sql_value(row.get(column)) for column in columns)
+                quoted_columns = ", ".join(f"[{column}]" for column in columns)
+                connection.Execute(f"INSERT INTO [{table_name}] ({quoted_columns}) VALUES ({values})")
+    finally:
+        connection.Close()
+
+
 @app.get("/docs", include_in_schema=False)
 def custom_docs():
     return HTMLResponse("""
@@ -2720,6 +2791,50 @@ def tms_transfer_package(limit: int = 5000):
         media_type="application/zip",
         headers={
             "Content-Disposition": 'attachment; filename="uabams_tms_mdb_handoff_package.zip"'
+        },
+    )
+
+
+@app.get("/tms/mdb")
+def tms_mdb_file(limit: int = 5000):
+    safe_limit = max(1, min(limit, 5000))
+
+    try:
+        init_db()
+        rows_by_table = {
+            "SpatialAccelerationData": get_csv_rows("rms-records", safe_limit),
+            "ProcessedPeakData": get_csv_rows("peak-records", safe_limit),
+        }
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Database unavailable. Check DATABASE_URL. {exc.orig if getattr(exc, 'orig', None) else exc}",
+        ) from exc
+
+    export_dir = ARCHIVE_STORAGE_DIR / "tms_exports"
+    output_path = export_dir / "uabams_tms_transfer.mdb"
+
+    try:
+        create_mdb_with_windows_ado(rows_by_table, output_path)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                f"{exc} Deploy this same code on a Windows export machine with Microsoft Access "
+                "Database Engine/Jet/ACE and pywin32, or use /tms/package for the documented MDB handoff package."
+            ),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"MDB generation failed: {exc}",
+        ) from exc
+
+    return Response(
+        content=output_path.read_bytes(),
+        media_type="application/x-msaccess",
+        headers={
+            "Content-Disposition": 'attachment; filename="uabams_tms_transfer.mdb"'
         },
     )
 
