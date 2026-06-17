@@ -25,7 +25,21 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
 ALERT_SPEED_LIMIT_KMPH = 80
+MIN_MEASUREMENT_SPEED_KMPH = 20
+MAX_MEASUREMENT_SPEED_KMPH = 160
 SPATIAL_SAMPLE_DISTANCE_M = 0.25
+PEAK_WINDOW_DISTANCE_M = 50
+AXLE_ACCELERATION_RANGE_G = 100
+BOGIE_ACCELERATION_RANGE_G = 5
+AXLE_MAX_FREQUENCY_HZ = 500
+BOGIE_MAX_FREQUENCY_HZ = 100
+AXLE_MIN_SAMPLING_HZ = 2500
+BOGIE_MIN_SAMPLING_HZ = 500
+PEAK_LOCATION_ACCURACY_M = 5
+SPEED_ACCURACY_PERCENT = 2
+RAW_TIME_DOMAIN_RETENTION_DAYS = 7
+SPATIAL_ALERT_RETENTION_DAYS = 30
+MAX_SUPPORTED_TRAIN_SYSTEMS = 100
 PEAK_AXIS_THRESHOLDS_MG = {
     "al_x": 10000,
     "al_y": 8000,
@@ -201,6 +215,57 @@ CSV_REPORTS = {
         """,
     },
 }
+
+TMS_EXPORT_REPORTS = [
+    "archives",
+    "extracted-files",
+    "rms-records",
+    "peak-records",
+    "fault-records",
+    "raw-packet-records",
+    "cloud-alert-events",
+]
+
+TMS_SCHEMA_TEXT = """UABAMS TMS Transfer Package
+
+Specification alignment:
+- Processing station data is stored in PostgreSQL database tables.
+- ASCII CSV exports are generated from the same database records.
+- TMS transfer data includes spatial acceleration data and processed peak data.
+- MDB is the preferred final TMS transfer format in the specification. Actual MDB file generation requires a Microsoft Access/ODBC-compatible writer in the target CRIS/vendor environment. This package keeps the data open and documented so it can be imported into MDB/TMS.
+- Spatial acceleration data uses the 25 cm sampling interval requirement.
+- Processed peak data is summarized per 50 m window.
+- Alert events are speed-gated at 80 kmph and contain measured value plus GPS location.
+- Gateway can retain session archives during network/GSM unavailability and retry upload. Cloud returns HTTP 200/201 only after accepting the data so the gateway can clear local storage.
+- Speed measurement band documented for the system is 20-160 kmph.
+- Axle box acceleration measurement range is documented as +/-100g; bogie level range is documented as +/-5g.
+- Expected frequency range is 0-500 Hz at axle level and 0-100 Hz at bogie level. Minimum sampling frequency is 2500 Hz at axle level and 500 Hz at bogie level.
+- Peak location accuracy requirement is better than 5 m. Cloud stores peak latitude/longitude and peak position for map/report output.
+- Speed measurement accuracy requirement is +/-2% of actual speed. Cloud stores original and corrected speed values where available.
+- Discrete time-domain/raw data retention requirement is 7 days. Spatial acceleration data and alert reports retention requirement is 30 days at the processing station.
+- Processing station should scale for up to 100 train systems and route-wise threshold limits.
+- Data transfer should use suitable encryption; production deployment should use HTTPS/private APN or equivalent secure network.
+
+Included CSV files:
+- uabams_rms_25cm_records.csv: spatial acceleration data, one record per approx. 25 cm segment.
+- uabams_peak_50m_records.csv: processed peak data, one record per 50 m window.
+- uabams_fault_records.csv: gateway fault events.
+- uabams_raw_packet_records.csv: raw packet metadata.
+- uabams_session_archives.csv: uploaded archive metadata.
+- uabams_extracted_files.csv: extracted file metadata.
+- uabams_cloud_alert_events.csv: alert events for notification/map/graph display.
+
+Key record sizes in source binary files:
+- rms/rms_25cm.bin: 66 bytes per record.
+- peak/peak_50m.bin: 302 bytes per record.
+- faults/faults.bin: 75 bytes per record.
+
+Gateway upload API:
+- Method: PUT
+- Endpoint: /api/v1/archive
+- Body: Raw ZIP archive bytes.
+- Archive name: <gatewayId>__<trainId>__<sessionName>.zip
+"""
 
 
 def round_value(value, digits=4):
@@ -615,27 +680,35 @@ def get_csv_rows(report_name: str, limit: int = 100):
         return [dict(row._mapping) for row in result.fetchall()]
 
 
-def build_csv_response(report_name: str, limit: int = 100):
+def csv_fieldnames(report: dict, rows: list):
+    if rows:
+        return list(rows[0].keys())
+
+    query_words = report["query"].split("FROM", 1)[0].replace("SELECT", "")
+    return [
+        item.strip().split()[-1]
+        for item in query_words.split(",")
+        if item.strip()
+    ]
+
+
+def build_csv_text(report_name: str, limit: int = 100):
     report = CSV_REPORTS.get(report_name)
     rows = get_csv_rows(report_name, limit)
     output = io.StringIO()
 
-    if rows:
-        fieldnames = list(rows[0].keys())
-    else:
-        query_words = report["query"].split("FROM", 1)[0].replace("SELECT", "")
-        fieldnames = [
-            item.strip().split()[-1]
-            for item in query_words.split(",")
-            if item.strip()
-        ]
-
+    fieldnames = csv_fieldnames(report, rows)
     writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
     writer.writerows(rows)
+    return output.getvalue()
+
+
+def build_csv_response(report_name: str, limit: int = 100):
+    report = CSV_REPORTS.get(report_name)
 
     return Response(
-        content=output.getvalue(),
+        content=build_csv_text(report_name, limit),
         media_type="text/csv",
         headers={
             "Content-Disposition": f'attachment; filename="{report["filename"]}"'
@@ -1187,6 +1260,19 @@ def cloud_status():
             "schema_ready": False,
             "gateway_archive_endpoint": "/api/v1/archive",
             "alert_endpoint": "/api/v1/alerts",
+            "measurement_speed_band_kmph": f"{MIN_MEASUREMENT_SPEED_KMPH}-{MAX_MEASUREMENT_SPEED_KMPH}",
+            "spatial_sample_interval_m": SPATIAL_SAMPLE_DISTANCE_M,
+            "peak_window_distance_m": PEAK_WINDOW_DISTANCE_M,
+            "alert_speed_gate_kmph": ALERT_SPEED_LIMIT_KMPH,
+            "axle_acceleration_range_g": f"+/-{AXLE_ACCELERATION_RANGE_G}",
+            "bogie_acceleration_range_g": f"+/-{BOGIE_ACCELERATION_RANGE_G}",
+            "axle_min_sampling_hz": AXLE_MIN_SAMPLING_HZ,
+            "bogie_min_sampling_hz": BOGIE_MIN_SAMPLING_HZ,
+            "peak_location_accuracy_m": PEAK_LOCATION_ACCURACY_M,
+            "speed_accuracy_percent": SPEED_ACCURACY_PERCENT,
+            "raw_retention_days": RAW_TIME_DOMAIN_RETENTION_DAYS,
+            "spatial_alert_retention_days": SPATIAL_ALERT_RETENTION_DAYS,
+            "max_supported_train_systems": MAX_SUPPORTED_TRAIN_SYSTEMS,
         }
 
     return {
@@ -1200,6 +1286,19 @@ def cloud_status():
         "schema_ready": set(required_tables).issubset(set(available_tables)),
         "gateway_archive_endpoint": "/api/v1/archive",
         "alert_endpoint": "/api/v1/alerts",
+        "measurement_speed_band_kmph": f"{MIN_MEASUREMENT_SPEED_KMPH}-{MAX_MEASUREMENT_SPEED_KMPH}",
+        "spatial_sample_interval_m": SPATIAL_SAMPLE_DISTANCE_M,
+        "peak_window_distance_m": PEAK_WINDOW_DISTANCE_M,
+        "alert_speed_gate_kmph": ALERT_SPEED_LIMIT_KMPH,
+        "axle_acceleration_range_g": f"+/-{AXLE_ACCELERATION_RANGE_G}",
+        "bogie_acceleration_range_g": f"+/-{BOGIE_ACCELERATION_RANGE_G}",
+        "axle_min_sampling_hz": AXLE_MIN_SAMPLING_HZ,
+        "bogie_min_sampling_hz": BOGIE_MIN_SAMPLING_HZ,
+        "peak_location_accuracy_m": PEAK_LOCATION_ACCURACY_M,
+        "speed_accuracy_percent": SPEED_ACCURACY_PERCENT,
+        "raw_retention_days": RAW_TIME_DOMAIN_RETENTION_DAYS,
+        "spatial_alert_retention_days": SPATIAL_ALERT_RETENTION_DAYS,
+        "max_supported_train_systems": MAX_SUPPORTED_TRAIN_SYSTEMS,
     }
 
 
@@ -2236,7 +2335,7 @@ def receive_gateway_data(data: GatewayData):
 
             vertical_limit = threshold.vertical_threshold
             lateral_limit = threshold.lateral_threshold
-            is_alert_speed = corrected_speed_kmph > ALERT_SPEED_LIMIT_KMPH
+            is_alert_speed = corrected_speed_kmph >= ALERT_SPEED_LIMIT_KMPH
 
             # Vertical Alert
             if is_alert_speed and abs(data.vertical_g) > vertical_limit:
@@ -2540,6 +2639,61 @@ def csv_reports():
         }
         for name, report in CSV_REPORTS.items()
     ]
+
+
+@app.get("/tms/package")
+def tms_transfer_package(limit: int = 5000):
+    safe_limit = max(1, min(limit, 5000))
+    package = io.BytesIO()
+    created_utc = utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    try:
+        init_db()
+        with zipfile.ZipFile(package, "w", compression=zipfile.ZIP_DEFLATED) as tms_zip:
+            manifest = {
+                "system": "UABAMS",
+                "packageType": "TMS_TRANSFER_PACKAGE",
+                "createdUtc": created_utc,
+                "storageModel": "PostgreSQL database plus open ASCII CSV exports",
+                "preferredFinalFormat": "MDB",
+                "mdbNote": (
+                    "MDB is preferred in the specification. Generation of a true "
+                    "Microsoft Access MDB file requires an Access/ODBC-compatible "
+                    "writer in the target environment. This package contains the "
+                    "documented open CSV tables and schema needed for MDB/TMS import."
+                ),
+                "sourceUploadEndpoint": "/api/v1/archive",
+                "includedReports": [],
+            }
+
+            for report_name in TMS_EXPORT_REPORTS:
+                report = CSV_REPORTS[report_name]
+                csv_text = build_csv_text(report_name, safe_limit)
+                tms_zip.writestr(report["filename"], csv_text)
+                manifest["includedReports"].append(
+                    {
+                        "name": report_name,
+                        "title": report["title"],
+                        "filename": report["filename"],
+                    }
+                )
+
+            tms_zip.writestr("uabams_tms_schema.txt", TMS_SCHEMA_TEXT)
+            tms_zip.writestr("manifest.json", json.dumps(manifest, indent=2))
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Database unavailable. Check DATABASE_URL. {exc.orig if getattr(exc, 'orig', None) else exc}",
+        ) from exc
+
+    package.seek(0)
+    return Response(
+        content=package.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="uabams_tms_transfer_package.zip"'
+        },
+    )
 
 
 @app.get("/csv/preview/{report_name}")

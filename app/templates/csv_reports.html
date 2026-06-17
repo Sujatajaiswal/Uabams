@@ -34,9 +34,25 @@
     </section>
 
     <section class="panel">
-        <h2>Cloud Data CSV Downloads</h2>
+        <h2>TMS Transfer Package</h2>
         <p class="helper-text">
-            These CSV files are generated from uploaded ICD session archive records stored in the PostgreSQL cloud database.
+            The specification prefers MDB for final TMS transfer. In this cloud prototype, data is stored in PostgreSQL and exported as an open, documented ASCII transfer package that can be imported into MDB/TMS by the target environment.
+        </p>
+        <div class="report-row">
+            <div>
+                <strong>UABAMS TMS Transfer Package</strong>
+                <small>Includes spatial acceleration data, processed peak data, faults, raw metadata, schema, and manifest.</small>
+            </div>
+            <div class="report-actions">
+                <a class="nav-link" href="/tms/package">Download TMS Package</a>
+            </div>
+        </div>
+    </section>
+
+    <section class="panel">
+        <h2>Cloud Data ASCII/CSV Downloads</h2>
+        <p class="helper-text">
+            These open CSV files are generated from uploaded ICD session archive records stored in the PostgreSQL cloud database. They document the same tables that can be mapped into the preferred MDB format for TMS.
         </p>
         <div id="report-list" class="report-list"></div>
         <p id="message" class="message"></p>

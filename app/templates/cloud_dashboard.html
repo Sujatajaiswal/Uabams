@@ -89,12 +89,96 @@
     </section>
 
     <section class="panel">
+        <h2>Specification Alignment</h2>
+        <div class="report-list">
+            <article class="report-row">
+                <div>
+                    <strong>Speed Band</strong>
+                    <small>System data is intended for 20-160 kmph operation. Peak alert checks are speed-gated at 80 kmph.</small>
+                </div>
+            </article>
+            <article class="report-row">
+                <div>
+                    <strong>Spatial Acceleration Data</strong>
+                    <small>RMS spatial acceleration records are parsed from rms/rms_25cm.bin at about 25 cm intervals.</small>
+                </div>
+            </article>
+            <article class="report-row">
+                <div>
+                    <strong>Processed Peak Data</strong>
+                    <small>Peak records are parsed from peak/peak_50m.bin and summarized per 50 m window for alert reporting.</small>
+                </div>
+            </article>
+            <article class="report-row">
+                <div>
+                    <strong>Network/GSM Retry Model</strong>
+                    <small>If network transfer is unavailable, the gateway keeps local session archives and retries. Cloud returns 200/201 only after accepting the archive.</small>
+                </div>
+            </article>
+            <article class="report-row">
+                <div>
+                    <strong>TMS Handoff</strong>
+                    <small>Cloud stores records in PostgreSQL and exports an open TMS transfer package. MDB is the preferred final TMS format and can be generated/imported in the target CRIS/vendor environment.</small>
+                </div>
+            </article>
+        </div>
+    </section>
+
+    <section class="panel">
+        <h2>Measurement & Processing Requirements</h2>
+        <div class="status-grid">
+            <div class="status-item">
+                <span>Axle Box Range</span>
+                <strong>+/-100g</strong>
+            </div>
+            <div class="status-item">
+                <span>Bogie Range</span>
+                <strong>+/-5g</strong>
+            </div>
+            <div class="status-item">
+                <span>Frequency Range</span>
+                <strong>Axle 0-500 Hz | Bogie 0-100 Hz</strong>
+            </div>
+            <div class="status-item">
+                <span>Minimum Sampling</span>
+                <strong>Axle 2500 Hz | Bogie 500 Hz</strong>
+            </div>
+            <div class="status-item">
+                <span>Peak Location Accuracy</span>
+                <strong>&lt; 5 m</strong>
+            </div>
+            <div class="status-item">
+                <span>Speed Accuracy</span>
+                <strong>+/-2%</strong>
+            </div>
+            <div class="status-item">
+                <span>Retention</span>
+                <strong>Raw 7 days | Spatial/alerts 30 days</strong>
+            </div>
+            <div class="status-item">
+                <span>System Scale</span>
+                <strong>Up to 100 train systems</strong>
+            </div>
+        </div>
+        <p class="helper-text" style="margin-top: 14px;">
+            Hardware measurement range, frequency response, sampling, environmental tests, GSM/private APN, and sensor mounting are gateway/hardware compliance points. The cloud stores the measured values, GPS/encoder location, speed, route-wise thresholds, alerts, and reports received from those systems.
+        </p>
+    </section>
+
+    <section class="panel">
         <div class="section-title-row">
             <div>
                 <h2>CSV Downloads</h2>
-                <p class="helper-text">CSV files are generated from parsed archive/session records stored in PostgreSQL.</p>
+                <p class="helper-text">ASCII CSV files and a TMS transfer package are generated from parsed archive/session records stored in PostgreSQL. MDB is the preferred final TMS handoff format in the specification.</p>
             </div>
             <a class="nav-link" href="/csv-page">Open CSV Page</a>
+        </div>
+        <div class="report-row" style="margin-bottom: 12px;">
+            <div>
+                <strong>TMS Transfer Package</strong>
+                <small>Open documented package containing spatial acceleration data, processed peak data, schema, and manifest for MDB/TMS import.</small>
+            </div>
+            <a class="nav-link" href="/tms/package">Download Package</a>
         </div>
         <div id="csv-list" class="report-list"></div>
     </section>
