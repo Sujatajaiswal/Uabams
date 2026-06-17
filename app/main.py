@@ -217,20 +217,28 @@ CSV_REPORTS = {
 }
 
 TMS_EXPORT_REPORTS = [
-    "archives",
-    "extracted-files",
     "rms-records",
     "peak-records",
-    "fault-records",
-    "raw-packet-records",
-    "cloud-alert-events",
 ]
+
+TMS_TRANSFER_FILES = {
+    "rms-records": {
+        "filename": "spatial_acceleration_data.txt",
+        "mdb_table": "SpatialAccelerationData",
+        "description": "Spatial acceleration data sampled at about 25 cm intervals.",
+    },
+    "peak-records": {
+        "filename": "processed_peak_data.txt",
+        "mdb_table": "ProcessedPeakData",
+        "description": "Processed peak data summarized per 50 m window.",
+    },
+}
 
 TMS_SCHEMA_TEXT = """UABAMS TMS Transfer Package
 
 Specification alignment:
 - Processing station data is stored in PostgreSQL database tables.
-- ASCII CSV exports are generated from the same database records.
+- Open ASCII text exports are generated from the same database records.
 - TMS transfer data includes spatial acceleration data and processed peak data.
 - MDB is the preferred final TMS transfer format in the specification. Actual MDB file generation requires a Microsoft Access/ODBC-compatible writer in the target CRIS/vendor environment. This package keeps the data open and documented so it can be imported into MDB/TMS.
 - Spatial acceleration data uses the 25 cm sampling interval requirement.
@@ -246,14 +254,15 @@ Specification alignment:
 - Processing station should scale for up to 100 train systems and route-wise threshold limits.
 - Data transfer should use suitable encryption; production deployment should use HTTPS/private APN or equivalent secure network.
 
-Included CSV files:
-- uabams_rms_25cm_records.csv: spatial acceleration data, one record per approx. 25 cm segment.
-- uabams_peak_50m_records.csv: processed peak data, one record per 50 m window.
-- uabams_fault_records.csv: gateway fault events.
-- uabams_raw_packet_records.csv: raw packet metadata.
-- uabams_session_archives.csv: uploaded archive metadata.
-- uabams_extracted_files.csv: extracted file metadata.
-- uabams_cloud_alert_events.csv: alert events for notification/map/graph display.
+Included TMS data files:
+- spatial_acceleration_data.txt: spatial acceleration data, one record per approx. 25 cm segment. Target MDB table: SpatialAccelerationData.
+- processed_peak_data.txt: processed peak data, one record per 50 m window. Target MDB table: ProcessedPeakData.
+
+ASCII transfer format:
+- Delimiter: pipe character |
+- First row: column names
+- Encoding: UTF-8
+- Null/empty values: blank field
 
 Key record sizes in source binary files:
 - rms/rms_25cm.bin: 66 bytes per record.
@@ -692,16 +701,26 @@ def csv_fieldnames(report: dict, rows: list):
     ]
 
 
-def build_csv_text(report_name: str, limit: int = 100):
+def build_delimited_text(report_name: str, limit: int = 100, delimiter: str = ","):
     report = CSV_REPORTS.get(report_name)
     rows = get_csv_rows(report_name, limit)
     output = io.StringIO()
 
     fieldnames = csv_fieldnames(report, rows)
-    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
+    writer = csv.DictWriter(
+        output,
+        fieldnames=fieldnames,
+        extrasaction="ignore",
+        delimiter=delimiter,
+        lineterminator="\n",
+    )
     writer.writeheader()
     writer.writerows(rows)
     return output.getvalue()
+
+
+def build_csv_text(report_name: str, limit: int = 100):
+    return build_delimited_text(report_name, limit, delimiter=",")
 
 
 def build_csv_response(report_name: str, limit: int = 100):
@@ -2652,33 +2671,42 @@ def tms_transfer_package(limit: int = 5000):
         with zipfile.ZipFile(package, "w", compression=zipfile.ZIP_DEFLATED) as tms_zip:
             manifest = {
                 "system": "UABAMS",
-                "packageType": "TMS_TRANSFER_PACKAGE",
+                "packageType": "TMS_MDB_HANDOFF_PACKAGE",
                 "createdUtc": created_utc,
-                "storageModel": "PostgreSQL database plus open ASCII CSV exports",
+                "storageModel": "PostgreSQL database plus open ASCII text exports",
                 "preferredFinalFormat": "MDB",
                 "mdbNote": (
                     "MDB is preferred in the specification. Generation of a true "
                     "Microsoft Access MDB file requires an Access/ODBC-compatible "
                     "writer in the target environment. This package contains the "
-                    "documented open CSV tables and schema needed for MDB/TMS import."
+                    "documented open ASCII tables and schema needed for MDB/TMS import."
                 ),
                 "sourceUploadEndpoint": "/api/v1/archive",
                 "includedReports": [],
             }
 
             for report_name in TMS_EXPORT_REPORTS:
-                report = CSV_REPORTS[report_name]
-                csv_text = build_csv_text(report_name, safe_limit)
-                tms_zip.writestr(report["filename"], csv_text)
+                transfer_file = TMS_TRANSFER_FILES[report_name]
+                ascii_text = build_delimited_text(report_name, safe_limit, delimiter="|")
+                tms_zip.writestr(transfer_file["filename"], ascii_text)
                 manifest["includedReports"].append(
                     {
                         "name": report_name,
-                        "title": report["title"],
-                        "filename": report["filename"],
+                        "title": CSV_REPORTS[report_name]["title"],
+                        "filename": transfer_file["filename"],
+                        "targetMdbTable": transfer_file["mdb_table"],
+                        "description": transfer_file["description"],
                     }
                 )
 
             tms_zip.writestr("uabams_tms_schema.txt", TMS_SCHEMA_TEXT)
+            tms_zip.writestr(
+                "MDB_IMPORT_INSTRUCTIONS.txt",
+                "Create/confirm the MDB schema with tables SpatialAccelerationData and ProcessedPeakData. "
+                "Import spatial_acceleration_data.txt and processed_peak_data.txt using pipe delimiter, "
+                "UTF-8 encoding, and first row as field names. Final MDB field naming/transfer protocol "
+                "should be confirmed with CRIS/vendor after award of contract.\n",
+            )
             tms_zip.writestr("manifest.json", json.dumps(manifest, indent=2))
     except SQLAlchemyError as exc:
         raise HTTPException(
@@ -2691,7 +2719,7 @@ def tms_transfer_package(limit: int = 5000):
         content=package.getvalue(),
         media_type="application/zip",
         headers={
-            "Content-Disposition": 'attachment; filename="uabams_tms_transfer_package.zip"'
+            "Content-Disposition": 'attachment; filename="uabams_tms_mdb_handoff_package.zip"'
         },
     )
 

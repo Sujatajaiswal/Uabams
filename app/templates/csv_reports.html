@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>CSV Reports</title>
+    <title>TMS / MDB Handoff</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 
@@ -10,7 +10,7 @@
     <header class="page-header">
         <div>
             <p class="eyebrow">Cloud Storage</p>
-            <h1>CSV Reports</h1>
+            <h1>TMS / MDB Handoff</h1>
         </div>
         <a class="nav-link" href="/dashboard">Dashboard</a>
     </header>
@@ -18,7 +18,7 @@
     <section class="panel">
         <h2>Upload Gateway Session ZIP</h2>
         <p class="helper-text">
-            Upload the ICD session archive created by the gateway. After a successful upload, the cloud stores the ZIP, extracts the files, parses the binary records, and generates the CSV reports below.
+            Upload the ICD session archive created by the gateway. After a successful upload, the cloud stores the ZIP, extracts the files, parses the binary records, and prepares the TMS/MDB handoff package.
         </p>
         <form id="archive-upload-form" class="form-grid">
             <label>
@@ -34,32 +34,32 @@
     </section>
 
     <section class="panel">
-        <h2>TMS Transfer Package</h2>
+        <h2>TMS / MDB Handoff Package</h2>
         <p class="helper-text">
-            The specification prefers MDB for final TMS transfer. In this cloud prototype, data is stored in PostgreSQL and exported as an open, documented ASCII transfer package that can be imported into MDB/TMS by the target environment.
+            The specification prefers MDB for final TMS transfer. This package contains the two required TMS datasets as documented ASCII import files for MDB creation/import in the target CRIS/vendor environment.
         </p>
         <div class="report-row">
             <div>
-                <strong>UABAMS TMS Transfer Package</strong>
-                <small>Includes spatial acceleration data, processed peak data, faults, raw metadata, schema, and manifest.</small>
+                <strong>UABAMS TMS / MDB Handoff Package</strong>
+                <small>Includes spatial acceleration data, processed peak data, MDB import instructions, schema, and manifest.</small>
             </div>
             <div class="report-actions">
-                <a class="nav-link" href="/tms/package">Download TMS Package</a>
+                <a class="nav-link" href="/tms/package">Download MDB Handoff Package</a>
             </div>
         </div>
     </section>
 
     <section class="panel">
-        <h2>Cloud Data ASCII/CSV Downloads</h2>
+        <h2>Source Table Preview</h2>
         <p class="helper-text">
-            These open CSV files are generated from uploaded ICD session archive records stored in the PostgreSQL cloud database. They document the same tables that can be mapped into the preferred MDB format for TMS.
+            These previews show the database tables used to prepare the MDB handoff package. The final TMS package contains spatial acceleration data and processed peak data.
         </p>
         <div id="report-list" class="report-list"></div>
         <p id="message" class="message"></p>
     </section>
 
     <section class="panel">
-        <h2 id="preview-title">CSV Preview</h2>
+        <h2 id="preview-title">Table Preview</h2>
         <div class="table-wrap">
             <table id="preview-table">
                 <thead></thead>
@@ -134,7 +134,7 @@ async function loadReports() {
             </div>
             <div class="report-actions">
                 <button type="button" onclick="previewReport('${report.name}')">Preview</button>
-                <a class="nav-link" href="${report.download_url}">Download CSV</a>
+                <a class="nav-link" href="${report.download_url}">Download ASCII</a>
             </div>
         </article>
     `).join("");
@@ -152,14 +152,14 @@ async function previewReport(name) {
     document.getElementById("preview-title").textContent = `${report.title} Preview`;
 
     if (!response.ok) {
-        message.textContent = report.detail || "Unable to load CSV preview.";
+        message.textContent = report.detail || "Unable to load table preview.";
         return;
     }
 
     if (!report.rows.length) {
         table.querySelector("thead").innerHTML = "";
         table.querySelector("tbody").innerHTML = "";
-        message.textContent = "No records found for this CSV report yet.";
+        message.textContent = "No records found for this table yet.";
         return;
     }
 
@@ -170,7 +170,7 @@ async function previewReport(name) {
     table.querySelector("tbody").innerHTML = report.rows.map(row => `
         <tr>${columns.map(column => `<td>${row[column] ?? ""}</td>`).join("")}</tr>
     `).join("");
-    message.textContent = `Showing latest ${report.rows.length} records. Use Download CSV for the full export.`;
+    message.textContent = `Showing latest ${report.rows.length} records. Use the MDB handoff package for TMS transfer.`;
 }
 
 loadReports();

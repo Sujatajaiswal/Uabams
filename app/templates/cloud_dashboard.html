@@ -13,7 +13,7 @@
             <h1>Gateway Archive Dashboard</h1>
         </div>
         <div class="header-actions">
-            <a class="nav-link" href="/csv-page">CSV Reports</a>
+            <a class="nav-link" href="/csv-page">TMS / MDB Handoff</a>
             <a class="nav-link" href="/docs">API Docs</a>
         </div>
     </header>
@@ -118,7 +118,7 @@
             <article class="report-row">
                 <div>
                     <strong>TMS Handoff</strong>
-                    <small>Cloud stores records in PostgreSQL and exports an open TMS transfer package. MDB is the preferred final TMS format and can be generated/imported in the target CRIS/vendor environment.</small>
+                    <small>Cloud stores records in PostgreSQL and exports a TMS/MDB handoff package. MDB is the preferred final TMS format and can be generated/imported in the target CRIS/vendor environment.</small>
                 </div>
             </article>
         </div>
@@ -168,17 +168,17 @@
     <section class="panel">
         <div class="section-title-row">
             <div>
-                <h2>CSV Downloads</h2>
-                <p class="helper-text">ASCII CSV files and a TMS transfer package are generated from parsed archive/session records stored in PostgreSQL. MDB is the preferred final TMS handoff format in the specification.</p>
+                <h2>TMS / MDB Handoff</h2>
+                <p class="helper-text">The handoff package is generated from parsed archive/session records stored in PostgreSQL. It contains the two required TMS datasets and MDB import instructions.</p>
             </div>
-            <a class="nav-link" href="/csv-page">Open CSV Page</a>
+            <a class="nav-link" href="/csv-page">Open Handoff Page</a>
         </div>
         <div class="report-row" style="margin-bottom: 12px;">
             <div>
-                <strong>TMS Transfer Package</strong>
-                <small>Open documented package containing spatial acceleration data, processed peak data, schema, and manifest for MDB/TMS import.</small>
+                <strong>TMS / MDB Handoff Package</strong>
+                <small>Contains spatial acceleration data, processed peak data, schema, manifest, and MDB import instructions.</small>
             </div>
-            <a class="nav-link" href="/tms/package">Download Package</a>
+            <a class="nav-link" href="/tms/package">Download MDB Handoff</a>
         </div>
         <div id="csv-list" class="report-list"></div>
     </section>
@@ -189,7 +189,7 @@
                 <h2>Uploaded Session Archives</h2>
                 <p class="helper-text">Received gateway ZIP archives and validation status.</p>
             </div>
-            <a class="nav-link" href="/csv/download/archives">Download Archives CSV</a>
+            <a class="nav-link" href="/csv/download/archives">Download ASCII</a>
         </div>
         <div class="table-wrap">
             <table>
@@ -216,7 +216,7 @@
                 <h2>Parsed RMS 25cm Records</h2>
                 <p class="helper-text">Parsed from rms/rms_25cm.bin fixed 66-byte records.</p>
             </div>
-            <a class="nav-link" href="/csv/download/rms-records">Download RMS CSV</a>
+            <a class="nav-link" href="/csv/download/rms-records">Download ASCII</a>
         </div>
         <div class="table-wrap">
             <table>
@@ -245,7 +245,7 @@
                 <h2>Parsed Peak 50m Records</h2>
                 <p class="helper-text">Parsed from peak/peak_50m.bin fixed 302-byte records.</p>
             </div>
-            <a class="nav-link" href="/csv/download/peak-records">Download Peak CSV</a>
+            <a class="nav-link" href="/csv/download/peak-records">Download ASCII</a>
         </div>
         <div class="table-wrap">
             <table>
@@ -272,7 +272,7 @@
                 <h2>Parsed Fault Records</h2>
                 <p class="helper-text">Parsed from faults/faults.bin fixed 75-byte records.</p>
             </div>
-            <a class="nav-link" href="/csv/download/fault-records">Download Fault CSV</a>
+            <a class="nav-link" href="/csv/download/fault-records">Download ASCII</a>
         </div>
         <div class="table-wrap">
             <table>
@@ -299,7 +299,7 @@
                 <h2>Raw Packet Metadata</h2>
                 <p class="helper-text">Length-prefixed raw packet metadata from raw/*.bin files.</p>
             </div>
-            <a class="nav-link" href="/csv/download/raw-packet-records">Download Raw Metadata CSV</a>
+            <a class="nav-link" href="/csv/download/raw-packet-records">Download ASCII</a>
         </div>
         <div class="table-wrap">
             <table>
@@ -329,7 +329,7 @@
                 <h2>Realtime Alert Events</h2>
                 <p class="helper-text">Received through POST /api/v1/alerts when gateway sends alert event JSON.</p>
             </div>
-            <a class="nav-link" href="/csv/download/cloud-alert-events">Download Alert Events CSV</a>
+            <a class="nav-link" href="/csv/download/cloud-alert-events">Download ASCII</a>
         </div>
         <div class="table-wrap">
             <table>
@@ -429,7 +429,7 @@ async function loadCsvReports() {
             </div>
             <div class="report-actions">
                 <a class="nav-link" href="${report.preview_url}" target="_blank">View JSON</a>
-                <a class="nav-link" href="${report.download_url}">Download CSV</a>
+                <a class="nav-link" href="${report.download_url}">Download ASCII</a>
             </div>
         </article>
     `).join("");
