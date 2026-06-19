@@ -1,0 +1,52 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: uabams-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: uabams
+      POSTGRES_PASSWORD: uabams
+      POSTGRES_DB: uabams
+    ports:
+      - "5432:5432"
+    volumes:
+      - uabams_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U uabams"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    container_name: uabams-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://uabams:uabams@db:5432/uabams
+      CORS_ORIGINS: "*"
+      DEFAULT_SAMPLING_RATE: "2500"
+      GATEWAY_OFFLINE_AFTER_SECONDS: "300"
+      SEED_ON_STARTUP: "true"
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+    container_name: uabams-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  uabams_pg_data:

@@ -1,11 +1,60 @@
+# Render Blueprint - deploys backend (web service), Postgres, and frontend
+# (static site) in one go via "New + Blueprint" on https://dashboard.render.com
+# pointing at this repo. See README.md "Deploying to Render" for the manual
+# click-through steps if you'd rather not use a Blueprint.
+
+databases:
+  - name: uabams-db
+    plan: free
+    databaseName: uabams
+    user: uabams
+
 services:
   - type: web
-    name: uabams-cloud-api
-    runtime: python
+    name: uabams-backend
+    runtime: docker
     plan: free
-    buildCommand: pip install -r requirements-render.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /health
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
     envVars:
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: uabams-db
+          property: connectionString
+      - key: CORS_ORIGINS
+        value: "*"
+      - key: SEED_ON_STARTUP
+        value: "true"
+      - key: DEFAULT_SAMPLING_RATE
+        value: "2500"
+      - key: GATEWAY_OFFLINE_AFTER_SECONDS
+        value: "300"
+      - key: AUTH_API_KEY
+        value: "uabams-demo-api-key"
+      - key: SMS_ENABLED
+        value: "false"
+      - key: SMS_PROVIDER_URL
+        value: ""
+      - key: SMS_API_KEY
+        value: ""
+      - key: SMS_FROM
+        value: "UABAMS"
+      - key: SMS_TO_NUMBERS
+        value: ""
+
+  - type: web
+    name: uabams-frontend
+    runtime: static
+    plan: free
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
+    rootDir: frontend
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://uabams-backend.onrender.com
+      - key: VITE_API_KEY
+        value: "uabams-demo-api-key"
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

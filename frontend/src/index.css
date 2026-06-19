@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  @apply font-body text-rail-navy antialiased;
+}
+
+::selection {
+  background-color: #1B5FAE33;
+}
+
+/* Thin, engineered scrollbars to match the instrumentation feel */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #C3CCD8;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9AA6B5;
+}
+
+@layer components {
+  .panel {
+    @apply bg-white border border-rail-line rounded-panel shadow-panel;
+  }
+  .panel-header {
+    @apply flex items-center justify-between px-4 py-3 border-b border-rail-line;
+  }
+  .label-eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-wider text-rail-steelLight;
+  }
+}

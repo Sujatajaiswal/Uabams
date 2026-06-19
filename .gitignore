@@ -1,9 +1,25 @@
-.env
-venv/
+# Python
 __pycache__/
-*.pyc
-.pytest_cache/
+*.py[cod]
+*.pyc.*
+*.egg-info/
+.venv/
+venv/
+*.db
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Env files
+.env
+.env.local
+
+# OS / editor
+.DS_Store
+*.log
+tmp_render/
 render_check/
 uploaded_archives/
-GW_BOGIE_*.zip
-*.log
