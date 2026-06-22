@@ -35,7 +35,7 @@
         <div class="section-title-row">
             <div>
                 <h2>Storage Logs</h2>
-                <p class="helper-text">Latest received gateway payloads, alert notifications, SMS logs, and archive upload records.</p>
+                <p class="helper-text">Latest received gateway payloads, operation decisions, alert notifications, SMS logs, and archive upload records.</p>
             </div>
         </div>
         <div id="storage-log" class="storage-log"></div>
@@ -64,6 +64,7 @@ function valueText(value) {
 function recordTitle(collectionName, record) {
     if (collectionName === "gateway_archives") return `${record.trainId || "TRAIN"} / ${record.sessionName || "session"}`;
     if (collectionName === "raw_gateway_payloads") return `Raw payload ${record.sessionName || "session"}`;
+    if (collectionName === "operation_decisions") return `${record.operationMode || "Decision"} / ${record.trainId || "TRAIN"}`;
     if (collectionName === "alert_notifications") return `Alert ${record.trainId || "TRAIN"} at ${record.speedKmph || "-"} kmph`;
     if (collectionName === "sms_logs") return `SMS log ${record.status || "stored"}`;
     if (collectionName === "archive_uploads") return record.archiveName || "Archive upload";
@@ -76,6 +77,7 @@ function recordMessage(collectionName, record) {
         return `Gateway ${record.gatewayId || "-"}, route ${record.routeName || "-"}, speed ${record.speedKmph || "-"} kmph, peak ${record.peakG || "-"}g`;
     }
     if (collectionName === "raw_gateway_payloads") return "Original gateway JSON payload stored for traceability.";
+    if (collectionName === "operation_decisions") return `${record.operationReason || "Speed rule evaluated."} Speed ${record.speedKmph || "-"} kmph, peak ${record.peakG || "-"}g`;
     if (collectionName === "sms_logs") return `Recipient ${record.recipient || "NOT_CONFIGURED"}, provider ${record.provider || "not_configured"}`;
     if (collectionName === "archive_uploads") return `Validation ${record.validationStatus || "-"}, size ${record.archiveSizeBytes || "-"} bytes`;
     return valueText(record);

@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>UABAMS Compliance & Reference</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="shell">
+    <header class="page-header">
+        <div>
+            <p class="eyebrow">Cloud Requirements</p>
+            <h1>Compliance & Reference Dashboard</h1>
+        </div>
+        <div class="header-actions">
+            <button type="button" id="seed-button">Create Demo Records</button>
+            <button type="button" id="cleanup-button">Run Retention Check</button>
+            <button type="button" id="refresh-button">Refresh</button>
+            <a class="nav-link" href="/dashboard">Dashboard</a>
+        </div>
+    </header>
+
+    <section id="compliance-banner" class="alert-banner">Loading requirement status...</section>
+
+    <section class="panel">
+        <div class="section-title-row">
+            <div>
+                <h2>Requirement Completion</h2>
+                <p class="helper-text">These items complete the cloud-side gaps for route reference data, section reporting, device health, power status, authentication, SMS logging, and retention readiness.</p>
+            </div>
+        </div>
+        <div class="status-grid" id="status-grid"></div>
+    </section>
+
+    <section class="panel">
+        <div class="section-title-row">
+            <div>
+                <h2>Reference & Monitoring Records</h2>
+                <p class="helper-text">Records below are stored in MongoDB Atlas and can be used by the final cloud implementation team.</p>
+            </div>
+        </div>
+        <div id="record-grid" class="mongo-collections"></div>
+    </section>
+
+    <section class="panel">
+        <h2>Retention Policy</h2>
+        <div id="retention-grid" class="status-grid"></div>
+        <div id="retention-output" class="storage-log"></div>
+    </section>
+</main>
+
+<script>
+const apiKey = "uabams-demo-api-key";
+const banner = document.getElementById("compliance-banner");
+const statusGrid = document.getElementById("status-grid");
+const recordGrid = document.getElementById("record-grid");
+const retentionGrid = document.getElementById("retention-grid");
+const retentionOutput = document.getElementById("retention-output");
+
+const sources = [
+    ["Route Reference", "/api/v1/route-reference", "RDSO route latitude/longitude + track features"],
+    ["Section Reference", "/api/v1/section-reference", "Railway/Division/Section/KM reporting"],
+    ["Device Health", "/api/v1/device-health", "Gateway software/GSM/GPS/storage status"],
+    ["Power Status", "/api/v1/power-status", "Battery and power supply monitoring"],
+    ["SMS Logs", "/api/v1/sms-notifications", "SMS/demo notification audit trail"]
+];
+
+async function api(url, options = {}) {
+    const response = await fetch(url, {
+        ...options,
+        headers: {
+            "X-API-Key": apiKey,
+            "Content-Type": "application/json",
+            ...(options.headers || {})
+        }
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || data.message || response.statusText);
+    return data;
+}
+
+function renderStatus(results, retention) {
+    const totalRecords = results.reduce((sum, item) => sum + item.count, 0);
+    const cards = [
+        ["Authentication", "API key protected"],
+        ["Cloud DB", "MongoDB Atlas"],
+        ["Reference Records", totalRecords],
+        ["Raw Retention", `${retention.rawTimeDomainRetentionDays} days`],
+        ["Spatial/Alert Retention", `${retention.spatialAlertRetentionDays} days`],
+        ["SMS Mode", "Logs + provider-ready"]
+    ];
+    statusGrid.innerHTML = cards.map(([label, value]) => `
+        <div class="status-item"><span>${label}</span><strong>${value}</strong></div>
+    `).join("");
+}
+
+function recordsFrom(data) {
+    if (Array.isArray(data.records)) return data.records;
+    if (Array.isArray(data.logs)) return data.logs;
+    return [];
+}
+
+function renderRecords(results) {
+    recordGrid.innerHTML = results.map(item => {
+        const rows = item.records.length
+            ? item.records.slice(0, 5).map(record => `<pre>${JSON.stringify(record, null, 2)}</pre>`).join("")
+            : `<div class="empty-state">No records yet. Click Create Demo Records.</div>`;
+        return `
+            <article class="collection-card">
+                <div class="section-title-row">
+                    <div><h3>${item.label}</h3><small>${item.description}</small></div>
+                    <strong>${item.count} records</strong>
+                </div>
+                ${rows}
+            </article>
+        `;
+    }).join("");
+}
+
+function renderRetention(retention) {
+    const cards = [
+        ["Cleanup Endpoint", retention.cleanupEndpoint],
+        ["Raw Collections", retention.rawCollections.join(", ")],
+        ["Spatial/Alert Collections", retention.spatialAlertCollections.join(", ")],
+        ["Mode", "Dry-run by default"]
+    ];
+    retentionGrid.innerHTML = cards.map(([label, value]) => `
+        <div class="status-item"><span>${label}</span><strong>${value}</strong></div>
+    `).join("");
+}
+
+async function loadAll() {
+    banner.textContent = "Loading compliance records from MongoDB...";
+    try {
+        const retention = await api("/api/v1/retention-status");
+        const results = [];
+        for (const [label, url, description] of sources) {
+            const data = await api(url);
+            const rows = recordsFrom(data);
+            results.push({ label, url, description, records: rows, count: rows.length });
+        }
+        renderStatus(results, retention);
+        renderRecords(results);
+        renderRetention(retention);
+        banner.textContent = "Requirement records loaded from MongoDB cloud storage.";
+    } catch (error) {
+        banner.textContent = `Unable to load compliance records: ${error.message || error}`;
+        banner.classList.add("is-active");
+    }
+}
+
+async function seedRecords() {
+    banner.textContent = "Creating demo reference/health/power records...";
+    const data = await api("/api/v1/compliance-demo-seed", { method: "POST", body: "{}" });
+    banner.textContent = data.message || "Demo records created.";
+    await loadAll();
+}
+
+async function retentionCheck() {
+    banner.textContent = "Running retention dry-run check...";
+    const data = await api("/api/v1/retention-cleanup?dry_run=true", { method: "POST", body: "{}" });
+    retentionOutput.innerHTML = `<article class="log-row"><div><strong>Retention dry-run completed</strong><small>No records deleted in dry-run mode.</small></div><span>checked</span></article><pre>${JSON.stringify(data.deleted, null, 2)}</pre>`;
+    banner.textContent = "Retention dry-run completed. No records were deleted.";
+}
+
+ document.getElementById("refresh-button").addEventListener("click", loadAll);
+ document.getElementById("seed-button").addEventListener("click", seedRecords);
+ document.getElementById("cleanup-button").addEventListener("click", retentionCheck);
+ loadAll();
+</script>
+</body>
+</html>

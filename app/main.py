@@ -7,7 +7,7 @@ import re
 import struct
 import zipfile
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -100,6 +100,20 @@ SMS_TO_NUMBERS = [number.strip() for number in os.getenv("SMS_TO_NUMBERS", "").s
 _mongo_client = None
 
 
+
+MONGO_STORAGE_COLLECTIONS = [
+    "gateway_archives",
+    "raw_gateway_payloads",
+    "archive_uploads",
+    "alert_notifications",
+    "sms_logs",
+    "route_reference",
+    "section_reference",
+    "device_health",
+    "power_status",
+    "retention_actions",
+    "operation_decisions",
+]
 CSV_REPORTS = {
     "archives": {
         "title": "Session Archives",
@@ -390,13 +404,7 @@ def mongo_storage_summary(limit: int = 5):
     try:
         db = get_mongo_db()
         db.command("ping")
-        for name in [
-            "gateway_archives",
-            "raw_gateway_payloads",
-            "archive_uploads",
-            "alert_notifications",
-            "sms_logs",
-        ]:
+        for name in MONGO_STORAGE_COLLECTIONS:
             collection = db[name]
             rows = list(collection.find({}, {"_id": 0}).sort("createdAt", -1).limit(safe_limit))
             summary["collections"][name] = {
@@ -1187,6 +1195,44 @@ class CloudAlertEvent(BaseModel):
     speedKmph: float
     triggeredAxes: list[TriggeredAxis]
 
+
+class RouteReferencePoint(BaseModel):
+    routeName: str
+    kmMarker: int = Field(ge=0)
+    latitude: float
+    longitude: float
+    trackFeature: Optional[str] = None
+    description: Optional[str] = None
+
+
+class SectionReference(BaseModel):
+    railway: str
+    division: str
+    sectionName: str
+    routeName: str
+    fromKm: float = Field(ge=0)
+    toKm: float = Field(ge=0)
+
+
+class DeviceHealthStatus(BaseModel):
+    gatewayId: str
+    trainId: str
+    firmwareVersion: Optional[str] = None
+    softwareVersion: Optional[str] = None
+    gsmSignalPercent: Optional[float] = Field(default=None, ge=0, le=100)
+    gpsFix: Optional[bool] = None
+    storageFreeMb: Optional[float] = Field(default=None, ge=0)
+    status: str = "online"
+
+
+class PowerStatus(BaseModel):
+    gatewayId: str
+    trainId: str
+    batteryPercent: float = Field(ge=0, le=100)
+    inputVoltage: Optional[float] = Field(default=None, ge=0)
+    charging: Optional[bool] = None
+    backupAvailableHours: Optional[float] = Field(default=None, ge=0)
+    status: str = "normal"
 
 def init_db():
     with engine.connect() as conn:
@@ -2139,6 +2185,194 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
     )
 
 
+
+def latest_mongo_rows(collection_name: str, limit: int = 20):
+    if not mongo_enabled():
+        return []
+    db = get_mongo_db()
+    safe_limit = max(1, min(limit, 100))
+    return clean_for_mongo(list(db[collection_name].find({}, {"_id": 0}).sort("createdAt", -1).limit(safe_limit)))
+
+
+@app.post("/api/v1/route-reference")
+def save_route_reference(point: RouteReferencePoint, _: bool = Depends(verify_api_key)):
+    doc = point.dict()
+    doc["createdAt"] = utc_now().isoformat()
+    doc["purpose"] = "RDSO route latitude/longitude and track-feature reference point"
+    mongo_id = mongo_insert("route_reference", doc)
+    return {
+        "status": "success" if mongo_id else "mongodb_not_configured",
+        "message": "Route reference point stored in MongoDB cloud storage" if mongo_id else "MongoDB is not configured",
+        "mongoId": mongo_id,
+        "data": doc,
+    }
+
+
+@app.get("/api/v1/route-reference")
+def get_route_reference(limit: int = 50, _: bool = Depends(verify_api_key)):
+    return {"status": "success", "records": latest_mongo_rows("route_reference", limit)}
+
+
+@app.post("/api/v1/section-reference")
+def save_section_reference(section: SectionReference, _: bool = Depends(verify_api_key)):
+    if section.toKm < section.fromKm:
+        raise HTTPException(status_code=422, detail="toKm must be greater than or equal to fromKm")
+    doc = section.dict()
+    doc["createdAt"] = utc_now().isoformat()
+    doc["purpose"] = "Railway/Division/Section/KM range for section-wise reporting"
+    mongo_id = mongo_insert("section_reference", doc)
+    return {
+        "status": "success" if mongo_id else "mongodb_not_configured",
+        "message": "Section reference stored in MongoDB cloud storage" if mongo_id else "MongoDB is not configured",
+        "mongoId": mongo_id,
+        "data": doc,
+    }
+
+
+@app.get("/api/v1/section-reference")
+def get_section_reference(limit: int = 50, _: bool = Depends(verify_api_key)):
+    return {"status": "success", "records": latest_mongo_rows("section_reference", limit)}
+
+
+@app.post("/api/v1/device-health")
+def save_device_health(status: DeviceHealthStatus, _: bool = Depends(verify_api_key)):
+    doc = status.dict()
+    doc["receivedAt"] = utc_now().isoformat()
+    doc["createdAt"] = doc["receivedAt"]
+    doc["purpose"] = "Remote gateway/software/GSM/GPS/storage health monitoring"
+    mongo_id = mongo_insert("device_health", doc)
+    return {
+        "status": "success" if mongo_id else "mongodb_not_configured",
+        "message": "Device health stored in MongoDB cloud storage" if mongo_id else "MongoDB is not configured",
+        "mongoId": mongo_id,
+        "data": doc,
+    }
+
+
+@app.get("/api/v1/device-health")
+def get_device_health(limit: int = 50, _: bool = Depends(verify_api_key)):
+    return {"status": "success", "records": latest_mongo_rows("device_health", limit)}
+
+
+@app.post("/api/v1/power-status")
+def save_power_status(status: PowerStatus, _: bool = Depends(verify_api_key)):
+    doc = status.dict()
+    doc["receivedAt"] = utc_now().isoformat()
+    doc["createdAt"] = doc["receivedAt"]
+    doc["purpose"] = "Gateway power supply and backup battery monitoring"
+    mongo_id = mongo_insert("power_status", doc)
+    return {
+        "status": "success" if mongo_id else "mongodb_not_configured",
+        "message": "Power status stored in MongoDB cloud storage" if mongo_id else "MongoDB is not configured",
+        "mongoId": mongo_id,
+        "data": doc,
+    }
+
+
+@app.get("/api/v1/power-status")
+def get_power_status(limit: int = 50, _: bool = Depends(verify_api_key)):
+    return {"status": "success", "records": latest_mongo_rows("power_status", limit)}
+
+
+@app.get("/api/v1/retention-status")
+def retention_status(_: bool = Depends(verify_api_key)):
+    return {
+        "status": "configured",
+        "rawTimeDomainRetentionDays": RAW_TIME_DOMAIN_RETENTION_DAYS,
+        "spatialAlertRetentionDays": SPATIAL_ALERT_RETENTION_DAYS,
+        "rawCollections": ["raw_gateway_payloads", "archive_uploads"],
+        "spatialAlertCollections": ["gateway_archives", "alert_notifications", "sms_logs", "route_reference", "section_reference", "device_health", "power_status"],
+        "cleanupEndpoint": "/api/v1/retention-cleanup",
+        "note": "Retention cleanup is API-triggered for demo. Production can call this endpoint from a scheduler/cron job.",
+    }
+
+
+@app.post("/api/v1/retention-cleanup")
+def retention_cleanup(dry_run: bool = True, _: bool = Depends(verify_api_key)):
+    if not mongo_enabled():
+        return {"status": "mongodb_not_configured", "deleted": {}, "dryRun": dry_run}
+    db = get_mongo_db()
+    now = utc_now()
+    policies = {
+        "raw_gateway_payloads": RAW_TIME_DOMAIN_RETENTION_DAYS,
+        "archive_uploads": RAW_TIME_DOMAIN_RETENTION_DAYS,
+        "gateway_archives": SPATIAL_ALERT_RETENTION_DAYS,
+        "alert_notifications": SPATIAL_ALERT_RETENTION_DAYS,
+        "sms_logs": SPATIAL_ALERT_RETENTION_DAYS,
+        "device_health": SPATIAL_ALERT_RETENTION_DAYS,
+        "power_status": SPATIAL_ALERT_RETENTION_DAYS,
+    }
+    results = {}
+    for collection_name, retention_days in policies.items():
+        cutoff = (now - timedelta(days=retention_days)).isoformat()
+        query = {"createdAt": {"$lt": cutoff}}
+        count = db[collection_name].count_documents(query)
+        if dry_run:
+            deleted_count = 0
+        else:
+            deleted_count = db[collection_name].delete_many(query).deleted_count
+        results[collection_name] = {
+            "retentionDays": retention_days,
+            "cutoffUtc": cutoff,
+            "matchingRecords": count,
+            "deletedRecords": deleted_count,
+        }
+    mongo_insert("retention_actions", {"dryRun": dry_run, "results": results, "createdAt": utc_now().isoformat()})
+    return {"status": "success", "dryRun": dry_run, "deleted": results}
+
+
+@app.post("/api/v1/compliance-demo-seed")
+def compliance_demo_seed(_: bool = Depends(verify_api_key)):
+    samples = [
+        ("route_reference", {
+            "routeName": "Bangalore-Chennai",
+            "kmMarker": 42,
+            "latitude": 12.9712,
+            "longitude": 77.5912,
+            "trackFeature": "curve",
+            "description": "Demo RDSO route reference point",
+            "createdAt": utc_now().isoformat(),
+        }),
+        ("section_reference", {
+            "railway": "SWR",
+            "division": "Bangalore",
+            "sectionName": "Bangalore-Chennai Demo Section",
+            "routeName": "Bangalore-Chennai",
+            "fromKm": 40,
+            "toKm": 50,
+            "createdAt": utc_now().isoformat(),
+        }),
+        ("device_health", {
+            "gatewayId": "GW_BOGIE_001",
+            "trainId": "TRAIN_07",
+            "firmwareVersion": "1.0.0",
+            "softwareVersion": "cloud-demo",
+            "gsmSignalPercent": 82,
+            "gpsFix": True,
+            "storageFreeMb": 2048,
+            "status": "online",
+            "createdAt": utc_now().isoformat(),
+        }),
+        ("power_status", {
+            "gatewayId": "GW_BOGIE_001",
+            "trainId": "TRAIN_07",
+            "batteryPercent": 88,
+            "inputVoltage": 24.0,
+            "charging": True,
+            "backupAvailableHours": 24,
+            "status": "normal",
+            "createdAt": utc_now().isoformat(),
+        }),
+    ]
+    inserted = {}
+    for collection_name, doc in samples:
+        inserted[collection_name] = mongo_insert(collection_name, doc)
+    return {
+        "status": "success" if mongo_enabled() else "mongodb_not_configured",
+        "message": "Reference, section, health, and power demo records stored in MongoDB",
+        "inserted": inserted,
+        "storageView": "/mongodb-page",
+    }
 @app.get("/api/v1/mongodb-storage")
 def get_mongodb_storage(limit: int = 5, _: bool = Depends(verify_api_key)):
     return mongo_storage_summary(limit)
@@ -2167,6 +2401,16 @@ async def mongodb_demo_upload(request: Request, _: bool = Depends(verify_api_key
     route_name = payload.get("route") or payload.get("routeName") or "DEFAULT"
 
     received_at = utc_now().isoformat()
+    if speed_kmph < MIN_MEASUREMENT_SPEED_KMPH:
+        operation_mode = "CALIBRATION_REQUIRED"
+        operation_reason = "Speed is below 20 kmph, so wheel/encoder calibration can be reviewed before normal measurement."
+    elif speed_kmph >= ALERT_SPEED_LIMIT_KMPH and peak_g > 0:
+        operation_mode = "ALERT_MONITORING"
+        operation_reason = "Speed is at least 80 kmph and peak acceleration is present, so alert/SMS processing is enabled."
+    else:
+        operation_mode = "THRESHOLD_MONITORING"
+        operation_reason = "Speed is at least 20 kmph, so route-wise threshold monitoring is active."
+
     gateway_document = {
         "source": "render-demo-json",
         "gatewayId": gateway_id,
@@ -2175,6 +2419,8 @@ async def mongodb_demo_upload(request: Request, _: bool = Depends(verify_api_key
         "routeName": route_name,
         "speedKmph": speed_kmph,
         "peakG": peak_g,
+        "operationMode": operation_mode,
+        "operationReason": operation_reason,
         "gps": {"lat": lat, "lon": lon},
         "receivedAt": received_at,
         "payload": payload,
@@ -2189,6 +2435,19 @@ async def mongodb_demo_upload(request: Request, _: bool = Depends(verify_api_key
             "sessionName": session_name,
             "receivedAt": received_at,
             "payload": payload,
+        }),
+        "operation_decisions": mongo_insert("operation_decisions", {
+            "gatewayId": gateway_id,
+            "trainId": train_id,
+            "sessionName": session_name,
+            "routeName": route_name,
+            "speedKmph": speed_kmph,
+            "peakG": peak_g,
+            "operationMode": operation_mode,
+            "operationReason": operation_reason,
+            "calibrationSpeedLimitKmph": MIN_MEASUREMENT_SPEED_KMPH,
+            "alertSpeedLimitKmph": ALERT_SPEED_LIMIT_KMPH,
+            "receivedAt": received_at,
         }),
     }
 
@@ -2263,9 +2522,9 @@ async def mongodb_demo_upload(request: Request, _: bool = Depends(verify_api_key
                     },
                 ).fetchone()
                 conn.commit()
-            inserted["postgres_alert_event_id"] = row.alert_event_id if row else None
+            inserted["alert_event_id"] = row.alert_event_id if row else None
         except Exception as exc:
-            inserted["postgres_alert_error"] = str(exc)
+            inserted["alert_event_error"] = str(exc)
 
     return {
         "status": "success",
@@ -2274,6 +2533,8 @@ async def mongodb_demo_upload(request: Request, _: bool = Depends(verify_api_key
         "database": MONGODB_DB_NAME,
         "inserted": inserted,
         "alertsGenerated": alerts_generated,
+        "operationMode": operation_mode,
+        "operationReason": operation_reason,
         "storageView": "/api/v1/mongodb-storage",
     }
 
@@ -3407,6 +3668,13 @@ def mongodb_page(request: Request):
     )
 
 
+
+@app.get("/compliance-page")
+def compliance_page(request: Request):
+    return templates.TemplateResponse(
+        "compliance.html",
+        {"request": request},
+    )
 @app.get("/csv-page")
 def csv_page(request: Request):
     return templates.TemplateResponse(
