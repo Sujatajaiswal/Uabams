@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -90,6 +90,7 @@ FIXED_RECORD_SIZES = {
 }
 MONGODB_URL = os.getenv("MONGODB_URL", "")
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "uabams_cloud")
+AUTH_API_KEY = os.getenv("AUTH_API_KEY", "uabams-demo-api-key")
 _mongo_client = None
 
 
@@ -316,6 +317,16 @@ def database_host():
 
 def utc_now():
     return datetime.utcnow()
+
+
+
+
+def verify_api_key(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+    if not AUTH_API_KEY:
+        return True
+    if x_api_key != AUTH_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    return True
 
 
 def mongo_enabled():
@@ -2053,12 +2064,17 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
 
 
 @app.get("/api/v1/mongodb-storage")
-def get_mongodb_storage(limit: int = 5):
+def get_mongodb_storage(limit: int = 5, _: bool = Depends(verify_api_key)):
     return mongo_storage_summary(limit)
 
 
+@app.get("/api/v1/auth-check")
+def auth_check(_: bool = Depends(verify_api_key)):
+    return {"status": "authenticated", "message": "API key accepted"}
+
+
 @app.post("/api/v1/mongodb-demo-upload")
-async def mongodb_demo_upload(request: Request):
+async def mongodb_demo_upload(request: Request, _: bool = Depends(verify_api_key)):
     try:
         payload = await request.json()
     except json.JSONDecodeError as exc:
@@ -2126,6 +2142,58 @@ async def mongodb_demo_upload(request: Request):
             "status": "skipped" if not os.getenv("SMS_ENABLED") else "queued",
             "provider": os.getenv("SMS_PROVIDER_URL", "not_configured"),
         })
+        try:
+            init_db()
+            alert_payload = {
+                "gatewayId": gateway_id,
+                "trainId": train_id,
+                "sessionName": session_name,
+                "routeName": route_name,
+                "windowStartMm": 0,
+                "windowEndMm": 50000,
+                "speedKmph": speed_kmph,
+                "triggeredAxes": [
+                    {
+                        "axisName": "bg_z",
+                        "alertType": "VERTICAL",
+                        "peakValueMg": int(round(peak_g * 1000)),
+                        "thresholdMg": 50000,
+                        "peakPositionMm": 1200,
+                        "peakLat": lat,
+                        "peakLon": lon,
+                    }
+                ],
+            }
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("""
+                        INSERT INTO cloud_alert_events
+                        (
+                            gateway_id, train_id, session_name, window_start_mm,
+                            window_end_mm, speed_kmph, triggered_axes_count, payload_json
+                        )
+                        VALUES
+                        (
+                            :gateway_id, :train_id, :session_name, :window_start_mm,
+                            :window_end_mm, :speed_kmph, :triggered_axes_count, :payload_json
+                        )
+                        RETURNING alert_event_id
+                    """),
+                    {
+                        "gateway_id": gateway_id,
+                        "train_id": train_id,
+                        "session_name": session_name,
+                        "window_start_mm": 0,
+                        "window_end_mm": 50000,
+                        "speed_kmph": speed_kmph,
+                        "triggered_axes_count": 1,
+                        "payload_json": json.dumps(alert_payload),
+                    },
+                ).fetchone()
+                conn.commit()
+            inserted["postgres_alert_event_id"] = row.alert_event_id if row else None
+        except Exception as exc:
+            inserted["postgres_alert_error"] = str(exc)
 
     return {
         "status": "success",
