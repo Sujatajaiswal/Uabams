@@ -40,5 +40,11 @@ class Settings:
     SMS_TO_NUMBERS: str = os.getenv("SMS_TO_NUMBERS", "")
     SMS_TIMEOUT_SECONDS: float = float(os.getenv("SMS_TIMEOUT_SECONDS", "10"))
 
+    # Optional MongoDB Atlas mirror storage. PostgreSQL remains the main
+    # processing database; MongoDB is used to demonstrate cloud document
+    # storage for raw gateway payloads, alerts, and SMS notification logs.
+    MONGODB_URL: str = os.getenv("MONGODB_URL", "")
+    MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "uabams_cloud")
+
 
 settings = Settings()

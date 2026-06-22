@@ -21,9 +21,43 @@ from app import models, schemas
 from app.database import get_db
 from app.services import validation
 from app.services.alerts import evaluate_alerts, get_or_default_threshold
+from app.services.mongodb_storage import mirror_archive_upload, mongo_enabled
 from app.services.sms import dispatch_sms_for_alerts
 
 router = APIRouter(prefix="/api/v1", tags=["archive"])
+
+
+def _alert_to_doc(alert: models.Alert) -> dict:
+    return {
+        "id": alert.id,
+        "gatewayId": alert.gateway_id,
+        "trainId": alert.train_id,
+        "route": alert.route,
+        "axleId": alert.axle_id,
+        "metric": alert.metric,
+        "value": alert.value,
+        "thresholdValue": alert.threshold_value,
+        "speedKmph": alert.speed_kmph,
+        "severity": alert.severity,
+        "message": alert.message,
+        "createdAt": alert.created_at,
+    }
+
+
+def _sms_to_doc(log: models.SmsNotification) -> dict:
+    return {
+        "id": log.id,
+        "alertId": log.alert_id,
+        "gatewayId": log.gateway_id,
+        "trainId": log.train_id,
+        "recipient": log.recipient,
+        "provider": log.provider,
+        "message": log.message,
+        "status": log.status,
+        "providerResponse": log.provider_response,
+        "createdAt": log.created_at,
+    }
+
 
 
 def _extract_json_payload(content_type: str, raw: bytes) -> dict:
@@ -127,8 +161,46 @@ async def _handle_archive(request: Request, db: Session) -> schemas.ArchiveRespo
     alerts_created = evaluate_alerts(db_session, axle_records, threshold, db)
     db.flush()
     sms_logs = dispatch_sms_for_alerts(db, alerts_created)
+    db.flush()
+
+    archive_doc = {
+        "postgresSessionId": db_session.id,
+        "sessionId": session_id,
+        "gatewayId": payload.gatewayId,
+        "trainId": payload.trainId,
+        "route": route,
+        "timestamp": db_session.timestamp,
+        "gps": {"lat": payload.gps.lat, "lon": payload.gps.lon},
+        "speedKmph": payload.resolved_speed,
+        "contentType": content_type or "application/json",
+        "receivedAt": now,
+    }
+    axle_docs = [
+        {
+            "id": rec.id,
+            "axleId": rec.axle_id,
+            "verticalG": rec.vertical_g,
+            "lateralG": rec.lateral_g,
+            "rms": rec.rms,
+            "peak": rec.peak,
+            "createdAt": rec.created_at,
+        }
+        for rec in axle_records
+    ]
+    mongo_result = mirror_archive_upload(
+        archive=archive_doc,
+        raw_payload=payload_dict,
+        axle_records=axle_docs,
+        alerts=[_alert_to_doc(alert) for alert in alerts_created],
+        sms_logs=[_sms_to_doc(log) for log in sms_logs],
+    )
 
     db.commit()
+
+    mongo_message = "MongoDB mirror disabled"
+    if mongo_enabled():
+        written = [name for name, inserted_id in mongo_result.items() if inserted_id]
+        mongo_message = "MongoDB collections updated: " + (", ".join(written) or "none")
 
     return schemas.ArchiveResponse(
         status="success",
@@ -136,7 +208,7 @@ async def _handle_archive(request: Request, db: Session) -> schemas.ArchiveRespo
         alertsGenerated=len(alerts_created),
         message=(
             f"Session '{session_id}' stored with {len(axle_records)} axle reading(s); "
-            f"SMS notifications logged: {len(sms_logs)}"
+            f"SMS notifications logged: {len(sms_logs)}; {mongo_message}"
         ),
     )
 

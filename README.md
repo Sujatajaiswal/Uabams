@@ -456,3 +456,27 @@ When alerts are generated, the cloud creates `sms_notifications` audit rows.
 If `SMS_ENABLED=true` and `SMS_PROVIDER_URL` is configured, the backend sends
 the SMS JSON payload to that provider. If SMS is not configured, the attempt
 is stored as `skipped` so the notification path remains auditable.
+## MongoDB Atlas mirror storage
+
+PostgreSQL remains the main processing database for thresholds, calibration, reports, alerts, and TMS export. For cloud-storage visibility, the backend can also mirror every gateway archive upload into MongoDB Atlas when `MONGODB_URL` is configured.
+
+Backend environment variables:
+
+```text
+MONGODB_URL=mongodb+srv://<user>:<password>@<cluster>/uabams_cloud?retryWrites=true&w=majority
+MONGODB_DB_NAME=uabams_cloud
+```
+
+Collections written for demo:
+
+- `gateway_archives` - full received upload summary with raw payload, parsed axle records, alerts, and SMS logs.
+- `raw_gateway_payloads` - raw gateway JSON/archive payload copy.
+- `alert_notifications` - generated alert documents.
+- `sms_logs` - SMS notification audit logs, including demo `skipped` status when no provider is connected.
+
+Protected API to show MongoDB storage status:
+
+```powershell
+curl -H "X-API-Key: uabams-demo-api-key" https://<backend-url>/api/v1/mongodb-storage
+```
+

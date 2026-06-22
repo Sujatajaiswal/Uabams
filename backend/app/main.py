@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import Base, engine
 from app.routers import (
-    alerts, archive, calibration, config, dashboard, gateways, maintenance,
+    alerts, archive, calibration, config, dashboard, gateways, maintenance, mongodb_storage,
     route_files, sections, sms, threshold, tms_export, trains,
 )
 from app.security import require_api_key
@@ -49,6 +49,7 @@ app.include_router(trains.router, dependencies=protected_dependencies)
 app.include_router(route_files.router, dependencies=protected_dependencies)
 app.include_router(sections.router, dependencies=protected_dependencies)
 app.include_router(maintenance.router, dependencies=protected_dependencies)
+app.include_router(mongodb_storage.router, dependencies=protected_dependencies)
 app.include_router(sms.router, dependencies=protected_dependencies)
 
 
@@ -80,3 +81,5 @@ def root():
         "docs": "/docs",
         "health": "/health",
     }
+
+
