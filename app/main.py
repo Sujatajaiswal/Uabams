@@ -327,7 +327,7 @@ def get_mongo_db():
     if not mongo_enabled():
         return None
     if _mongo_client is None:
-        _mongo_client = MongoClient(MONGODB_URL, serverSelectionTimeoutMS=5000)
+        _mongo_client = MongoClient(MONGODB_URL, serverSelectionTimeoutMS=10000, connectTimeoutMS=20000, socketTimeoutMS=20000, tls=True)
     return _mongo_client[MONGODB_DB_NAME]
 
 
@@ -3207,3 +3207,4 @@ def csv_page(request: Request):
         request,
         "csv_reports.html",
     )
+

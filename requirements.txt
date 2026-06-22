@@ -19,5 +19,4 @@ typing_extensions==4.15.0
 uvicorn==0.48.0
 PyQt5==5.15.11
 requests==2.32.5
-pymongo[srv]==4.8.0
-
+pymongo[srv]>=4.10,<5
