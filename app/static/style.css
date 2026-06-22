@@ -365,3 +365,76 @@ canvas {
         grid-template-columns: 1fr;
     }
 }
+
+.storage-log {
+    display: grid;
+    gap: 10px;
+}
+
+.log-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    border: 1px solid #d7dee4;
+    border-left: 5px solid #16636b;
+    border-radius: 8px;
+    background: #f8fafb;
+    padding: 12px 14px;
+}
+
+.log-row strong,
+.log-row small {
+    display: block;
+}
+
+.log-row small {
+    color: #55636f;
+    margin-top: 4px;
+}
+
+.log-row span {
+    border-radius: 999px;
+    background: #e8f3f4;
+    color: #16636b;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 5px 9px;
+    white-space: nowrap;
+}
+
+.mongo-collections {
+    display: grid;
+    gap: 16px;
+}
+
+.collection-card {
+    border: 1px solid #d7dee4;
+    border-radius: 8px;
+    background: #f8fafb;
+    padding: 16px;
+}
+
+.collection-card h3 {
+    margin: 0;
+}
+
+.collection-card pre {
+    max-height: 260px;
+    overflow: auto;
+    border: 1px solid #d7dee4;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #17202a;
+    font-size: 12px;
+    line-height: 1.45;
+    padding: 12px;
+    white-space: pre-wrap;
+}
+
+.empty-state {
+    border: 1px dashed #cbd4dc;
+    border-radius: 8px;
+    color: #55636f;
+    padding: 16px;
+}

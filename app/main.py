@@ -3269,6 +3269,14 @@ def alerts_page(request: Request):
     )
 
 
+@app.get("/mongodb-page")
+def mongodb_page(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "mongodb_storage.html",
+    )
+
+
 @app.get("/csv-page")
 def csv_page(request: Request):
     return templates.TemplateResponse(

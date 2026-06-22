@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MongoDB Cloud Storage</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="shell">
+    <header class="page-header">
+        <div>
+            <p class="eyebrow">Cloud Storage</p>
+            <h1>MongoDB Storage Dashboard</h1>
+        </div>
+        <div class="header-actions">
+            <button type="button" id="refresh-button">Refresh Storage</button>
+            <a class="nav-link" href="/dashboard">Dashboard</a>
+        </div>
+    </header>
+
+    <section id="storage-banner" class="alert-banner">
+        Checking MongoDB Atlas storage...
+    </section>
+
+    <section class="panel">
+        <div class="section-title-row">
+            <div>
+                <h2>Cloud Storage Status</h2>
+                <p class="helper-text">This page displays gateway data mirrored into MongoDB Atlas for cloud storage demo.</p>
+            </div>
+        </div>
+        <div class="status-grid" id="status-grid"></div>
+    </section>
+
+    <section class="panel">
+        <div class="section-title-row">
+            <div>
+                <h2>Storage Logs</h2>
+                <p class="helper-text">Latest received gateway payloads, alert notifications, SMS logs, and archive upload records.</p>
+            </div>
+        </div>
+        <div id="storage-log" class="storage-log"></div>
+    </section>
+
+    <section class="panel">
+        <h2>Collection Preview</h2>
+        <div id="collection-preview" class="mongo-collections"></div>
+    </section>
+</main>
+
+<script>
+const apiKey = "uabams-demo-api-key";
+const statusGrid = document.getElementById("status-grid");
+const storageLog = document.getElementById("storage-log");
+const collectionPreview = document.getElementById("collection-preview");
+const banner = document.getElementById("storage-banner");
+const refreshButton = document.getElementById("refresh-button");
+
+function valueText(value) {
+    if (value === null || value === undefined || value === "") return "-";
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
+}
+
+function recordTitle(collectionName, record) {
+    if (collectionName === "gateway_archives") return `${record.trainId || "TRAIN"} / ${record.sessionName || "session"}`;
+    if (collectionName === "raw_gateway_payloads") return `Raw payload ${record.sessionName || "session"}`;
+    if (collectionName === "alert_notifications") return `Alert ${record.trainId || "TRAIN"} at ${record.speedKmph || "-"} kmph`;
+    if (collectionName === "sms_logs") return `SMS log ${record.status || "stored"}`;
+    if (collectionName === "archive_uploads") return record.archiveName || "Archive upload";
+    return collectionName;
+}
+
+function recordMessage(collectionName, record) {
+    if (record.message) return record.message;
+    if (collectionName === "gateway_archives") {
+        return `Gateway ${record.gatewayId || "-"}, route ${record.routeName || "-"}, speed ${record.speedKmph || "-"} kmph, peak ${record.peakG || "-"}g`;
+    }
+    if (collectionName === "raw_gateway_payloads") return "Original gateway JSON payload stored for traceability.";
+    if (collectionName === "sms_logs") return `Recipient ${record.recipient || "NOT_CONFIGURED"}, provider ${record.provider || "not_configured"}`;
+    if (collectionName === "archive_uploads") return `Validation ${record.validationStatus || "-"}, size ${record.archiveSizeBytes || "-"} bytes`;
+    return valueText(record);
+}
+
+function renderStatus(data) {
+    const collections = data.collections || {};
+    const totalRecords = Object.values(collections).reduce((sum, item) => sum + Number(item.count || 0), 0);
+    const cards = [
+        ["MongoDB Status", data.status || "unknown"],
+        ["Database", data.database || "-"],
+        ["Configured", data.configured ? "Yes" : "No"],
+        ["Driver Available", data.driverAvailable ? "Yes" : "No"],
+        ["Collections", Object.keys(collections).length],
+        ["Total Stored Records", totalRecords]
+    ];
+    statusGrid.innerHTML = cards.map(([label, value]) => `
+        <div class="status-item">
+            <span>${label}</span>
+            <strong>${value}</strong>
+        </div>
+    `).join("");
+}
+
+function renderLogs(data) {
+    const collections = data.collections || {};
+    const logs = [];
+    Object.entries(collections).forEach(([name, info]) => {
+        (info.latest || []).forEach(record => {
+            logs.push({ collection: name, record, createdAt: record.createdAt || record.receivedAt || "" });
+        });
+    });
+    logs.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    if (!logs.length) {
+        storageLog.innerHTML = `<div class="empty-state">No MongoDB records found yet. Run the demo upload API, then refresh this page.</div>`;
+        return;
+    }
+    storageLog.innerHTML = logs.slice(0, 20).map(item => `
+        <article class="log-row">
+            <div>
+                <strong>${recordTitle(item.collection, item.record)}</strong>
+                <small>${recordMessage(item.collection, item.record)}</small>
+            </div>
+            <span>${item.collection}</span>
+        </article>
+    `).join("");
+}
+
+function renderCollections(data) {
+    const collections = data.collections || {};
+    collectionPreview.innerHTML = Object.entries(collections).map(([name, info]) => {
+        const latest = info.latest || [];
+        const rows = latest.length
+            ? latest.map(record => `<pre>${JSON.stringify(record, null, 2)}</pre>`).join("")
+            : `<div class="empty-state">No records in this collection yet.</div>`;
+        return `
+            <article class="collection-card">
+                <div class="section-title-row">
+                    <h3>${name}</h3>
+                    <strong>${info.count || 0} records</strong>
+                </div>
+                ${rows}
+            </article>
+        `;
+    }).join("");
+}
+
+async function loadStorage() {
+    banner.textContent = "Loading MongoDB Atlas storage...";
+    banner.classList.remove("is-active");
+    try {
+        const response = await fetch("/api/v1/mongodb-storage?limit=5", {
+            headers: { "X-API-Key": apiKey }
+        });
+        const data = await response.json();
+        renderStatus(data);
+        renderLogs(data);
+        renderCollections(data);
+        if (data.status === "connected") {
+            banner.textContent = "MongoDB Atlas connected. Cloud storage records are visible below.";
+        } else {
+            banner.textContent = data.error || data.message || "MongoDB storage is not connected.";
+            banner.classList.add("is-active");
+        }
+    } catch (error) {
+        banner.textContent = `Unable to load MongoDB storage: ${error}`;
+        banner.classList.add("is-active");
+    }
+}
+
+refreshButton.addEventListener("click", loadStorage);
+loadStorage();
+</script>
+</body>
+</html>
