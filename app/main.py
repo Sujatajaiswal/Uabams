@@ -89,6 +89,10 @@ FIXED_RECORD_SIZES = {
     "peak/peak_50m.bin": 302,
     "faults/faults.bin": 75,
 }
+PEAK_AXIS_THRESHOLDS_G = {
+    axis_name: threshold_mg / 1000
+    for axis_name, threshold_mg in PEAK_AXIS_THRESHOLDS_MG.items()
+}
 MONGODB_URL = os.getenv("MONGODB_URL", "")
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "uabams_cloud")
 AUTH_API_KEY = os.getenv("AUTH_API_KEY", "uabams-demo-api-key")
@@ -676,10 +680,12 @@ def parse_rms_records(file_path: Path):
 
 
 def parse_peak_axis(raw: bytes, base: int):
-    peak_value_mg, peak_position_mm, peak_master_count, peak_lat, peak_lon = struct.unpack_from(
-        "<IiQdd", raw, base
+    peak_value_g, peak_position_mm, peak_master_count, peak_lat, peak_lon = struct.unpack_from(
+        "<fiQdd", raw, base
     )
+    peak_value_mg = int(round(peak_value_g * 1000))
     return {
+        "peak_value_g": peak_value_g,
         "peak_value_mg": peak_value_mg,
         "peak_position_mm": peak_position_mm,
         "peak_master_count": peak_master_count,
@@ -701,7 +707,7 @@ def parse_peak_records(file_path: Path):
         "bg_z": 270,
     }
     records = []
-    for record_index, raw in iter_fixed_records(file_path, 302) or []:
+    for record_index, raw in iter_fixed_records(file_path, FIXED_RECORD_SIZES["peak/peak_50m.bin"]) or []:
         window_start_mm, window_end_mm, speed_kmph, valid_mask, alert_generated = struct.unpack_from(
             "<iifBB", raw, 0
         )
@@ -734,6 +740,15 @@ def axis_threshold_mg(axis_name: str, route_thresholds: Optional[dict] = None):
     if route_thresholds and alert_group == "LATERAL":
         return int(round(route_thresholds["lateral_threshold"] * 1000))
     return PEAK_AXIS_THRESHOLDS_MG.get(axis_name)
+
+
+def axis_threshold_g(axis_name: str, route_thresholds: Optional[dict] = None):
+    alert_group = axis_alert_group(axis_name)
+    if route_thresholds and alert_group == "VERTICAL":
+        return float(route_thresholds["vertical_threshold"])
+    if route_thresholds and alert_group == "LATERAL":
+        return float(route_thresholds["lateral_threshold"])
+    return PEAK_AXIS_THRESHOLDS_G.get(axis_name)
 
 
 def pick_highest_vertical_and_lateral_axes(triggered_axes: list[dict]):
@@ -791,17 +806,19 @@ def build_alert_event_from_peak_record(metadata: dict, peak_record: dict, route_
 
     triggered_axes = []
     for axis_name, axis in peak_record.get("axis_data", {}).items():
-        threshold_mg = axis_threshold_mg(axis_name, route_thresholds)
-        peak_value_mg = axis.get("peak_value_mg")
-        if threshold_mg is None or peak_value_mg in (None, 0xFFFFFFFF):
+        threshold_g = axis_threshold_g(axis_name, route_thresholds)
+        peak_value_g = axis.get("peak_value_g")
+        if threshold_g is None or peak_value_g is None:
             continue
-        if peak_value_mg > threshold_mg:
+        if peak_value_g > threshold_g:
             triggered_axes.append(
                 {
                     "axisName": axis_name,
                     "alertType": axis_alert_group(axis_name),
-                    "peakValueMg": peak_value_mg,
-                    "thresholdMg": threshold_mg,
+                    "peakValueG": peak_value_g,
+                    "thresholdG": threshold_g,
+                    "peakValueMg": int(round(peak_value_g * 1000)),
+                    "thresholdMg": int(round(threshold_g * 1000)),
                     "peakPositionMm": axis.get("peak_position_mm"),
                     "peakLat": axis.get("peak_lat"),
                     "peakLon": axis.get("peak_lon"),

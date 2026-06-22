@@ -263,8 +263,8 @@ function normalizeCloudAlert(row) {
         window: `${row.window_start_mm} - ${row.window_end_mm} mm`,
         speed: row.speed_kmph,
         axis: axis.axisName || axis.alertType || "-",
-        peakG: Number(axis.peakValueMg || 0) / 1000,
-        thresholdG: Number(axis.thresholdMg || 0) / 1000,
+        peakG: axis.peakValueG !== undefined ? Number(axis.peakValueG) : Number(axis.peakValueMg || 0) / 1000,
+        thresholdG: axis.thresholdG !== undefined ? Number(axis.thresholdG) : Number(axis.thresholdMg || 0) / 1000,
         latitude: axis.peakLat ?? row.latitude,
         longitude: axis.peakLon ?? row.longitude,
         received: row.received_utc

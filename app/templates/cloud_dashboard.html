@@ -34,7 +34,8 @@
             </div>
             <div class="status-item">
                 <span>Metadata</span>
-                <strong>session_metadata.json</strong>
+                <strong>session_metadata.json only</strong>
+                <small>RMS, peak, fault, and raw files are binary .bin files.</small>
             </div>
             <div class="status-item">
                 <span>Database</span>
@@ -70,7 +71,7 @@
             <article class="report-row">
                 <div>
                     <strong>Server Processes</strong>
-                    <small>session_metadata.json, rms/rms_25cm.bin, peak/peak_50m.bin, faults/faults.bin, and raw/*.bin files. RMS is parsed per about 25 cm segment; peak records are parsed per 50 m window.</small>
+                    <small>session_metadata.json plus seven binary files: rms/rms_25cm.bin, peak/peak_50m.bin, faults/faults.bin, and raw/*.bin. RMS is parsed per about 25 cm segment; peak records are parsed per 50 m window.</small>
                 </div>
             </article>
             <article class="report-row">
@@ -245,9 +246,9 @@
                         <th>Position mm</th>
                         <th>GPS Valid</th>
                         <th>Valid Mask</th>
-                        <th>AL X/Y/Z mg</th>
-                        <th>AR X/Y/Z mg</th>
-                        <th>BG X/Y/Z mg</th>
+                        <th>AL X/Y/Z g</th>
+                        <th>AR X/Y/Z g</th>
+                        <th>BG X/Y/Z g</th>
                     </tr>
                 </thead>
                 <tbody id="rms-body"></tbody>
@@ -379,6 +380,14 @@ function formatNumber(value, digits = 2) {
     return Number(value).toFixed(digits);
 }
 
+function formatRmsG(xMg, yMg, zMg) {
+    return [
+        Number(xMg || 0) / 1000,
+        Number(yMg || 0) / 1000,
+        Number(zMg || 0) / 1000
+    ].map(value => formatNumber(value, 3)).join(" / ");
+}
+
 const archiveFile = document.getElementById("archive-file");
 const archiveFilename = document.getElementById("archive-filename");
 const archiveUploadForm = document.getElementById("archive-upload-form");
@@ -494,9 +503,9 @@ function loadRmsRecords() {
         row => row.position_mm,
         row => row.gps_valid,
         row => row.valid_mask,
-        row => `${row.al_x_mg}/${row.al_y_mg}/${row.al_z_mg}`,
-        row => `${row.ar_x_mg}/${row.ar_y_mg}/${row.ar_z_mg}`,
-        row => `${row.bg_x_mg}/${row.bg_y_mg}/${row.bg_z_mg}`
+        row => formatRmsG(row.al_x_mg, row.al_y_mg, row.al_z_mg),
+        row => formatRmsG(row.ar_x_mg, row.ar_y_mg, row.ar_z_mg),
+        row => formatRmsG(row.bg_x_mg, row.bg_y_mg, row.bg_z_mg)
     ], "No RMS records parsed yet.");
 }
 
