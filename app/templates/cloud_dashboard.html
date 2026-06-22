@@ -12,10 +12,6 @@
             <p class="eyebrow">UABAMS Cloud Interface v1.2</p>
             <h1>Gateway Archive Dashboard</h1>
         </div>
-        <div class="header-actions">
-            <a class="nav-link" href="/csv-page">TMS / MDB Handoff</a>
-            <a class="nav-link" href="/docs">API Docs</a>
-        </div>
     </header>
 
     <section class="panel">
@@ -77,7 +73,7 @@
             <article class="report-row">
                 <div>
                     <strong>Server Stores</strong>
-                    <small>Original ZIP metadata, gateway payloads, extracted file metadata, RMS records, peak records, fault records, raw packet metadata, operation decisions, SMS logs, and alert events in MongoDB Atlas cloud storage.</small>
+                    <small>Original ZIP metadata, gateway payload, extracted file metadata, RMS records, peak records, fault records, raw packet metadata, and realtime alert events in MongoDB Atlas cloud storage.</small>
                 </div>
             </article>
             <article class="report-row">
@@ -90,114 +86,102 @@
     </section>
 
     <section class="panel">
-        <h2>Specification Alignment</h2>
-        <div class="report-list">
-            <article class="report-row">
-                <div>
-                    <strong>Speed Band</strong>
-                    <small>System data is intended for 20-160 kmph operation. Peak alert checks are speed-gated at 80 kmph.</small>
-                </div>
-            </article>
-            <article class="report-row">
-                <div>
-                    <strong>Spatial Acceleration Data</strong>
-                    <small>RMS spatial acceleration records are parsed from rms/rms_25cm.bin at about 25 cm intervals.</small>
-                </div>
-            </article>
-            <article class="report-row">
-                <div>
-                    <strong>Processed Peak Data</strong>
-                    <small>Peak records are parsed from peak/peak_50m.bin and summarized per 50 m window. If multiple peaks cross limits in the same window, the cloud keeps the highest vertical and highest lateral peak separately.</small>
-                </div>
-            </article>
-            <article class="report-row">
-                <div>
-                    <strong>GPS Alert Location</strong>
-                    <small>Safety alerts store measured peak value, speed, peak position, latitude, and longitude so the alert can be shown on the map and sent as notification data.</small>
-                </div>
-            </article>
-            <article class="report-row">
-                <div>
-                    <strong>Route-wise Thresholds</strong>
-                    <small>Vertical and lateral acceleration limits can be edited per route from 0 to 100g. Archive alert checks use the active route threshold where available.</small>
-                </div>
-            </article>
-            <article class="report-row">
-                <div>
-                    <strong>Network/GSM Retry Model</strong>
-                    <small>If GSM/network transfer is unavailable, the gateway keeps local session archives and retries later. Cloud returns 200/201 only after accepting the archive, so the gateway can safely clear local storage after confirmation.</small>
-                </div>
-            </article>
-            <article class="report-row">
-                <div>
-                    <strong>TMS Handoff</strong>
-                    <small>Cloud stores records in MongoDB Atlas and exports a TMS handoff package. The final transfer format can be ASCII/database export as agreed with the receiving TMS environment.</small>
-                </div>
-            </article>
+        <h2>ICD Archive Data Format</h2>
+        <p class="helper-text">
+            The gateway sends one ZIP archive. Only session_metadata.json is JSON; all other session files are binary .bin files.
+        </p>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>File in ZIP</th>
+                        <th>Type</th>
+                        <th>Format</th>
+                        <th>Cloud Use</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>session_metadata.json</td>
+                        <td>JSON</td>
+                        <td>Gateway, train, firmware, session name, status, created UTC</td>
+                        <td>Identifies the uploaded session</td>
+                    </tr>
+                    <tr>
+                        <td>rms/rms_25cm.bin</td>
+                        <td>Binary</td>
+                        <td>70-byte fixed records, RMS values as float g</td>
+                        <td>Spatial acceleration data every 25 cm</td>
+                    </tr>
+                    <tr>
+                        <td>peak/peak_50m.bin</td>
+                        <td>Binary</td>
+                        <td>302-byte fixed records, peak values as float g</td>
+                        <td>Peak acceleration per 50 m window</td>
+                    </tr>
+                    <tr>
+                        <td>faults/faults.bin</td>
+                        <td>Binary</td>
+                        <td>75-byte fixed records</td>
+                        <td>Gateway and node fault reporting</td>
+                    </tr>
+                    <tr>
+                        <td>raw/adxl_left.bin</td>
+                        <td>Binary</td>
+                        <td>Length-prefixed raw packet stream</td>
+                        <td>Left axle raw packet traceability</td>
+                    </tr>
+                    <tr>
+                        <td>raw/adxl_right.bin</td>
+                        <td>Binary</td>
+                        <td>Length-prefixed raw packet stream</td>
+                        <td>Right axle raw packet traceability</td>
+                    </tr>
+                    <tr>
+                        <td>raw/bogie.bin</td>
+                        <td>Binary</td>
+                        <td>Length-prefixed raw packet stream</td>
+                        <td>Bogie raw packet traceability</td>
+                    </tr>
+                    <tr>
+                        <td>raw/encoder.bin</td>
+                        <td>Binary</td>
+                        <td>Length-prefixed raw packet stream</td>
+                        <td>Encoder speed/distance traceability</td>
+                    </tr>
+                </tbody>
+            </table>
         </div>
     </section>
 
     <section class="panel">
-        <h2>Measurement & Processing Requirements</h2>
+        <h2>ICD Processing Rules</h2>
         <div class="status-grid">
             <div class="status-item">
-                <span>Axle Box Range</span>
-                <strong>+/-100g</strong>
+                <span>Archive Upload</span>
+                <strong>PUT /api/v1/archive</strong>
             </div>
             <div class="status-item">
-                <span>Bogie Range</span>
-                <strong>+/-5g</strong>
+                <span>Realtime Alert</span>
+                <strong>POST /api/v1/alert</strong>
             </div>
             <div class="status-item">
-                <span>Frequency Range</span>
-                <strong>Axle 0-500 Hz | Bogie 0-100 Hz</strong>
+                <span>Calibration Mode</span>
+                <strong>speedKmph &lt; 20</strong>
             </div>
             <div class="status-item">
-                <span>Minimum Sampling</span>
-                <strong>Axle 2500 Hz | Bogie 500 Hz</strong>
+                <span>Threshold Monitoring</span>
+                <strong>speedKmph &gt; 20</strong>
             </div>
             <div class="status-item">
-                <span>Peak Location Accuracy</span>
-                <strong>&lt; 5 m</strong>
+                <span>Alert Gate</span>
+                <strong>speedKmph &gt; 80 and peak &gt; threshold</strong>
             </div>
             <div class="status-item">
-                <span>Speed Accuracy</span>
-                <strong>+/-2%</strong>
-            </div>
-            <div class="status-item">
-                <span>Retention</span>
-                <strong>Raw 7 days | Spatial/alerts 30 days</strong>
-            </div>
-            <div class="status-item">
-                <span>System Scale</span>
-                <strong>Up to 100 train systems</strong>
+                <span>Cloud Storage</span>
+                <strong>MongoDB Atlas collections</strong>
             </div>
         </div>
-        <p class="helper-text" style="margin-top: 14px;">
-            Hardware measurement range, frequency response, sampling, environmental tests, GSM/private APN, and sensor mounting are gateway/hardware compliance points. The cloud stores the measured values, GPS/encoder location, speed, route-wise thresholds, alerts, and reports received from those systems.
-        </p>
-    </section>
-
-    <section class="panel">
-        <div class="section-title-row">
-            <div>
-                <h2>TMS / MDB Handoff</h2>
-                <p class="helper-text">The handoff package is generated from parsed archive/session records stored in MongoDB Atlas. It contains the two required TMS datasets and import instructions.</p>
-            </div>
-            <a class="nav-link" href="/csv-page">Open Handoff Page</a>
-        </div>
-        <div class="report-row" style="margin-bottom: 12px;">
-            <div>
-                <strong>TMS / MDB Handoff Package</strong>
-                <small>Contains spatial acceleration data, processed peak data, schema, manifest, and MDB import instructions.</small>
-            </div>
-            <div class="report-actions">
-                <a class="nav-link" href="/tms/mdb">Download Actual MDB</a>
-                <a class="nav-link" href="/tms/package">Download MDB Handoff</a>
-            </div>
-        </div>
-        <p class="helper-text">Actual MDB generation requires a Windows export environment with Microsoft Access Database Engine/Jet/ACE support. The handoff package remains available for Linux cloud deployment.</p>
-        <div id="csv-list" class="report-list"></div>
     </section>
 
     <section class="panel">
@@ -437,28 +421,10 @@ archiveUploadForm.addEventListener("submit", async (event) => {
         loadPeakRecords();
         loadFaultRecords();
         loadRawPackets();
-        loadCsvReports();
     } catch (error) {
         uploadMessage.textContent = `Archive upload failed: ${error.message}`;
     }
 });
-
-async function loadCsvReports() {
-    const response = await fetch("/csv/reports");
-    const reports = await response.json();
-    document.getElementById("csv-list").innerHTML = reports.map(report => `
-        <article class="report-row">
-            <div>
-                <strong>${report.title}</strong>
-                <small>${report.download_url}</small>
-            </div>
-            <div class="report-actions">
-                <a class="nav-link" href="${report.preview_url}" target="_blank">View JSON</a>
-                <a class="nav-link" href="${report.download_url}">Download ASCII</a>
-            </div>
-        </article>
-    `).join("");
-}
 
 async function loadTable(reportName, bodyId, columns, emptyMessage) {
     const body = document.getElementById(bodyId);
@@ -564,7 +530,6 @@ function loadAlertEvents() {
     ], "No realtime alert events received yet.");
 }
 
-loadCsvReports();
 loadArchives();
 loadRmsRecords();
 loadPeakRecords();

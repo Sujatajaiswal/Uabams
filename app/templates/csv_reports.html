@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>TMS / MDB Handoff</title>
+    <title>Gateway Archive Data Records</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 
@@ -10,7 +10,7 @@
     <header class="page-header">
         <div>
             <p class="eyebrow">Cloud Storage</p>
-            <h1>TMS / MDB Handoff</h1>
+            <h1>Gateway Archive Data Records</h1>
         </div>
         <a class="nav-link" href="/dashboard">Dashboard</a>
     </header>
@@ -18,7 +18,7 @@
     <section class="panel">
         <h2>Upload Gateway Session ZIP</h2>
         <p class="helper-text">
-            Upload the ICD session archive created by the gateway. After a successful upload, the cloud stores the ZIP, extracts the files, parses the binary records, and prepares the TMS/MDB handoff package.
+            Upload the ICD session archive created by the gateway. The cloud stores the ZIP metadata, extracts the 8 required files, parses binary records, and stores the parsed data in MongoDB Atlas.
         </p>
         <form id="archive-upload-form" class="form-grid">
             <label>
@@ -34,29 +34,9 @@
     </section>
 
     <section class="panel">
-        <h2>TMS / MDB Handoff Package</h2>
+        <h2>Cloud Storage Preview</h2>
         <p class="helper-text">
-            The specification prefers MDB for final TMS transfer. This package contains the two required TMS datasets as documented ASCII import files for MDB creation/import in the target CRIS/vendor environment.
-        </p>
-        <div class="report-row">
-            <div>
-                <strong>UABAMS TMS / MDB Handoff Package</strong>
-                <small>Includes spatial acceleration data, processed peak data, MDB import instructions, schema, and manifest.</small>
-            </div>
-            <div class="report-actions">
-                <button type="button" onclick="downloadActualMdb()">Download Actual MDB</button>
-                <a class="nav-link" href="/tms/package">Download MDB Handoff Package</a>
-            </div>
-        </div>
-        <p class="helper-text">
-            Actual MDB download works on a Windows export environment with Microsoft Access Database Engine/Jet/ACE support. On Linux cloud hosting, use the MDB handoff package.
-        </p>
-    </section>
-
-    <section class="panel">
-        <h2>Source Table Preview</h2>
-        <p class="helper-text">
-            These previews show the database tables used to prepare the MDB handoff package. The final TMS package contains spatial acceleration data and processed peak data.
+            These previews show the ICD records stored by the cloud after archive upload and realtime alert ingestion.
         </p>
         <div id="report-list" class="report-list"></div>
         <p id="message" class="message"></p>
@@ -138,7 +118,7 @@ async function loadReports() {
             </div>
             <div class="report-actions">
                 <button type="button" onclick="previewReport('${report.name}')">Preview</button>
-                <a class="nav-link" href="${report.download_url}">Download ASCII</a>
+                <a class="nav-link" href="${report.download_url}">Download Data</a>
             </div>
         </article>
     `).join("");
@@ -146,27 +126,6 @@ async function loadReports() {
     if (reports.length) {
         previewReport(reports[0].name);
     }
-}
-
-async function downloadActualMdb() {
-    message.textContent = "Requesting actual MDB file...";
-    const response = await fetch("/tms/mdb");
-    if (response.ok) {
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = "uabams_tms_transfer.mdb";
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(url);
-        message.textContent = "MDB file generated successfully.";
-        return;
-    }
-
-    const error = await response.json();
-    message.textContent = error.detail || "Actual MDB generation is not available in this environment.";
 }
 
 async function previewReport(name) {
@@ -195,7 +154,7 @@ async function previewReport(name) {
     table.querySelector("tbody").innerHTML = report.rows.map(row => `
         <tr>${columns.map(column => `<td>${row[column] ?? ""}</td>`).join("")}</tr>
     `).join("");
-    message.textContent = `Showing latest ${report.rows.length} records. Use the MDB handoff package for TMS transfer.`;
+    message.textContent = `Showing latest ${report.rows.length} stored cloud records.`;
 }
 
 loadReports();
