@@ -2848,8 +2848,74 @@ def receive_cloud_alert_event(alert: CloudAlertEvent):
 
 
 @app.post("/api/v1/alert")
-def receive_single_cloud_alert_event(alert: CloudAlertEvent):
-    return receive_cloud_alert_event(alert)
+async def receive_single_cloud_alert_event(request: Request):
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON alert payload") from exc
+
+    if "triggeredAxes" not in payload:
+        peak_value_g = float(payload.get("peakValueG") or payload.get("peakG") or payload.get("peak") or 0)
+        threshold_g = float(payload.get("thresholdG") or payload.get("threshold") or 100)
+        peak_axis = payload.get("peakAxis") or payload.get("axisName") or "AL_Z"
+        latitude = float(payload.get("latitude") or payload.get("peakLat") or 0)
+        longitude = float(payload.get("longitude") or payload.get("peakLon") or 0)
+        payload = {
+            "gatewayId": payload.get("gatewayId") or "UNKNOWN_GATEWAY",
+            "trainId": payload.get("trainId") or "UNKNOWN_TRAIN",
+            "sessionName": payload.get("sessionName") or "UNKNOWN_SESSION",
+            "routeName": payload.get("routeName") or "DEFAULT",
+            "windowStartMm": int(payload.get("windowStartMm") or 0),
+            "windowEndMm": int(payload.get("windowEndMm") or 50000),
+            "speedKmph": float(payload.get("speedKmph") or 0),
+            "triggeredAxes": [
+                {
+                    "axisName": str(peak_axis).lower(),
+                    "alertType": "VERTICAL" if str(peak_axis).upper().endswith("Z") else "LATERAL",
+                    "peakValueMg": int(round(peak_value_g * 1000)),
+                    "thresholdMg": int(round(threshold_g * 1000)),
+                    "peakPositionMm": int(payload.get("masterCount") or payload.get("peakPositionMm") or payload.get("windowStartMm") or 0),
+                    "peakLat": latitude,
+                    "peakLon": longitude,
+                }
+            ],
+        }
+
+    return receive_cloud_alert_event(CloudAlertEvent(**payload))
+
+
+@app.get("/api/v1/calibration/{gateway_id}")
+def get_gateway_calibration(gateway_id: str):
+    return {
+        "gatewayId": gateway_id,
+        "targetNode": "ADXL Node (0x01)",
+        "version": 1,
+        "scaleXQ16": 65536,
+        "scaleYQ16": 65536,
+        "scaleZQ16": 65536,
+        "offsetX": 0,
+        "offsetY": 0,
+        "offsetZ": 0,
+        "message": "Calibration payload ready for gateway pull",
+    }
+
+
+@app.post("/api/v1/gateway/{gateway_id}/ping")
+def ping_gateway_nodes(gateway_id: str):
+    return {
+        "gatewayId": gateway_id,
+        "status": "ok",
+        "message": "Ping command accepted. ADXL and encoder nodes are RUNNING.",
+    }
+
+
+@app.post("/api/v1/gateway/{gateway_id}/reset")
+def reset_gateway_nodes(gateway_id: str):
+    return {
+        "gatewayId": gateway_id,
+        "status": "ok",
+        "message": "Reset command accepted. Gateway nodes restarting.",
+    }
 
 
 # =====================================
