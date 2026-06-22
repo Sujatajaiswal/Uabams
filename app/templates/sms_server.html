@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>UABAMS SMS Server</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="shell">
+    <header class="page-header">
+        <div>
+            <p class="eyebrow">Notification Service</p>
+            <h1>SMS Server Dashboard</h1>
+        </div>
+        <div class="header-actions">
+            <button type="button" id="test-button">Create Test SMS Log</button>
+            <button type="button" id="refresh-button">Refresh Logs</button>
+            <a class="nav-link" href="/dashboard">Dashboard</a>
+        </div>
+    </header>
+
+    <section id="sms-banner" class="alert-banner">Loading SMS server status...</section>
+
+    <section class="panel">
+        <h2>SMS Server Status</h2>
+        <p class="helper-text">
+            Safety alerts above the 80 kmph speed gate are converted into SMS notification payloads. If a provider is not configured, the system stores demo SMS logs for review.
+        </p>
+        <div id="status-grid" class="status-grid"></div>
+    </section>
+
+    <section class="panel">
+        <h2>SMS Notification Logs</h2>
+        <div id="sms-log" class="storage-log"></div>
+    </section>
+</main>
+
+<script>
+const apiKey = "uabams-demo-api-key";
+const statusGrid = document.getElementById("status-grid");
+const smsLog = document.getElementById("sms-log");
+const banner = document.getElementById("sms-banner");
+const refreshButton = document.getElementById("refresh-button");
+const testButton = document.getElementById("test-button");
+
+function renderStatus(data) {
+    const cards = [
+        ["SMS Mode", data.providerStatus || data.smsProviderStatus || "unknown"],
+        ["SMS Enabled", data.smsEnabled ? "Yes" : "No"],
+        ["Provider URL", data.providerConfigured ? "Configured" : "Not configured"],
+        ["Recipients", data.recipientsConfigured || 0],
+        ["MongoDB", data.status || "-"],
+        ["Stored SMS Logs", data.count || 0]
+    ];
+    statusGrid.innerHTML = cards.map(([label, value]) => `
+        <div class="status-item">
+            <span>${label}</span>
+            <strong>${value}</strong>
+        </div>
+    `).join("");
+}
+
+function renderLogs(logs) {
+    if (!logs || !logs.length) {
+        smsLog.innerHTML = `<div class="empty-state">No SMS notification logs yet. Click Create Test SMS Log.</div>`;
+        return;
+    }
+    smsLog.innerHTML = logs.map(log => `
+        <article class="log-row">
+            <div>
+                <strong>${log.trainId || "TRAIN"} to ${log.recipient || "NOT_CONFIGURED"}</strong>
+                <small>${log.message || "-"}</small>
+                <small>Status: ${log.status || "-"} | Provider: ${log.providerStatus || log.provider || "-"}</small>
+            </div>
+            <span>${log.status || "stored"}</span>
+        </article>
+    `).join("");
+}
+
+async function loadSmsLogs() {
+    banner.textContent = "Loading SMS notification logs...";
+    banner.classList.remove("is-active");
+    try {
+        const response = await fetch("/api/v1/sms-notifications?limit=25", {
+            headers: { "X-API-Key": apiKey }
+        });
+        const data = await response.json();
+        renderStatus(data);
+        renderLogs(data.logs || []);
+        banner.textContent = data.providerStatus === "configured"
+            ? "SMS provider configured. Alert messages can be sent and logged."
+            : "SMS demo mode active. Alert messages are stored as SMS logs for review.";
+    } catch (error) {
+        banner.textContent = `Unable to load SMS logs: ${error}`;
+        banner.classList.add("is-active");
+    }
+}
+
+async function createTestSms() {
+    const body = {
+        gatewayId: "GW_BOGIE_001",
+        trainId: "TRAIN_07",
+        sessionName: `SMS_TEST_${Date.now()}`,
+        routeName: "Bangalore-Chennai",
+        speedKmph: 90,
+        peakG: 95,
+        gps: { lat: 12.9712, lon: 77.5912 }
+    };
+    banner.textContent = "Creating SMS test log...";
+    const response = await fetch("/api/v1/sms-test", {
+        method: "POST",
+        headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+    });
+    const data = await response.json();
+    banner.textContent = data.smsProviderStatus === "configured"
+        ? "SMS send attempted and logged."
+        : "Demo SMS message stored in cloud logs.";
+    await loadSmsLogs();
+}
+
+refreshButton.addEventListener("click", loadSmsLogs);
+testButton.addEventListener("click", createTestSms);
+loadSmsLogs();
+</script>
+</body>
+</html>

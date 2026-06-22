@@ -6,6 +6,7 @@ import os
 import re
 import struct
 import zipfile
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -91,6 +92,11 @@ FIXED_RECORD_SIZES = {
 MONGODB_URL = os.getenv("MONGODB_URL", "")
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "uabams_cloud")
 AUTH_API_KEY = os.getenv("AUTH_API_KEY", "uabams-demo-api-key")
+SMS_ENABLED = os.getenv("SMS_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+SMS_PROVIDER_URL = os.getenv("SMS_PROVIDER_URL", "")
+SMS_API_KEY = os.getenv("SMS_API_KEY", "")
+SMS_FROM = os.getenv("SMS_FROM", "UABAMS")
+SMS_TO_NUMBERS = [number.strip() for number in os.getenv("SMS_TO_NUMBERS", "").split(",") if number.strip()]
 _mongo_client = None
 
 
@@ -406,6 +412,76 @@ def mongo_storage_summary(limit: int = 5):
 
 def mirror_archive_to_mongo(payload: dict):
     return mongo_insert("archive_uploads", payload)
+
+
+def sms_provider_status():
+    if SMS_ENABLED and SMS_PROVIDER_URL and SMS_API_KEY and SMS_TO_NUMBERS:
+        return "configured"
+    if SMS_ENABLED:
+        return "incomplete_configuration"
+    return "demo_log_only"
+
+
+def build_sms_message(alert_doc: dict):
+    gps = alert_doc.get("gps") or {}
+    lat = gps.get("lat") or alert_doc.get("latitude") or "-"
+    lon = gps.get("lon") or alert_doc.get("longitude") or "-"
+    return (
+        f"UABAMS ALERT: Train {alert_doc.get('trainId', '-')} peak "
+        f"{alert_doc.get('peakG', alert_doc.get('peakValueMg', '-'))} at "
+        f"{alert_doc.get('speedKmph', '-')} kmph. GPS {lat}, {lon}."
+    )
+
+
+def send_sms_notification(alert_doc: dict, message: Optional[str] = None):
+    message = message or build_sms_message(alert_doc)
+    recipients = SMS_TO_NUMBERS or ["NOT_CONFIGURED"]
+    logs = []
+    for recipient in recipients:
+        log_doc = {
+            "gatewayId": alert_doc.get("gatewayId"),
+            "trainId": alert_doc.get("trainId"),
+            "sessionName": alert_doc.get("sessionName"),
+            "routeName": alert_doc.get("routeName"),
+            "recipient": recipient,
+            "sender": SMS_FROM,
+            "message": message,
+            "provider": SMS_PROVIDER_URL or "demo",
+            "status": "skipped",
+            "providerStatus": sms_provider_status(),
+            "createdAt": utc_now().isoformat(),
+        }
+        if SMS_ENABLED and SMS_PROVIDER_URL and SMS_API_KEY and recipient != "NOT_CONFIGURED":
+            try:
+                payload = json.dumps({
+                    "sender": SMS_FROM,
+                    "recipient": recipient,
+                    "message": message,
+                    "alert": clean_for_mongo(alert_doc),
+                }).encode("utf-8")
+                request = urllib.request.Request(
+                    SMS_PROVIDER_URL,
+                    data=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": SMS_API_KEY,
+                        "authkey": SMS_API_KEY,
+                    },
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    body = response.read().decode("utf-8", errors="replace")
+                log_doc["status"] = "sent"
+                log_doc["providerResponse"] = body[:1000]
+            except Exception as exc:
+                log_doc["status"] = "failed"
+                log_doc["error"] = str(exc)
+        else:
+            log_doc["status"] = "skipped"
+            log_doc["note"] = "SMS provider not configured; message stored for demo/logging."
+        log_doc["mongoId"] = mongo_insert("sms_logs", log_doc)
+        logs.append(log_doc)
+    return logs
 
 
 
@@ -2136,12 +2212,8 @@ async def mongodb_demo_upload(request: Request, _: bool = Depends(verify_api_key
             "receivedAt": received_at,
         }
         inserted["alert_notifications"] = mongo_insert("alert_notifications", alert_doc)
-        inserted["sms_logs"] = mongo_insert("sms_logs", {
-            **alert_doc,
-            "recipient": os.getenv("SMS_TO_NUMBERS", "NOT_CONFIGURED"),
-            "status": "skipped" if not os.getenv("SMS_ENABLED") else "queued",
-            "provider": os.getenv("SMS_PROVIDER_URL", "not_configured"),
-        })
+        sms_results = send_sms_notification(alert_doc, message)
+        inserted["sms_logs"] = [result.get("mongoId") for result in sms_results]
         try:
             init_db()
             alert_payload = {
@@ -2203,6 +2275,56 @@ async def mongodb_demo_upload(request: Request, _: bool = Depends(verify_api_key
         "inserted": inserted,
         "alertsGenerated": alerts_generated,
         "storageView": "/api/v1/mongodb-storage",
+    }
+
+
+@app.get("/api/v1/sms-notifications")
+def get_sms_notifications(limit: int = 20, _: bool = Depends(verify_api_key)):
+    safe_limit = max(1, min(limit, 100))
+    summary = {
+        "smsEnabled": SMS_ENABLED,
+        "providerStatus": sms_provider_status(),
+        "providerConfigured": bool(SMS_PROVIDER_URL),
+        "recipientsConfigured": len(SMS_TO_NUMBERS),
+        "database": MONGODB_DB_NAME,
+        "logs": [],
+    }
+    if not mongo_enabled():
+        summary["status"] = "mongodb_not_configured"
+        return summary
+    try:
+        db = get_mongo_db()
+        rows = list(db["sms_logs"].find({}, {"_id": 0}).sort("createdAt", -1).limit(safe_limit))
+        summary["status"] = "connected"
+        summary["logs"] = clean_for_mongo(rows)
+        summary["count"] = db["sms_logs"].count_documents({})
+    except PyMongoError as exc:
+        summary["status"] = "error"
+        summary["error"] = str(exc)
+    return summary
+
+
+@app.post("/api/v1/sms-test")
+async def sms_test(request: Request, _: bool = Depends(verify_api_key)):
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        payload = {}
+    alert_doc = {
+        "gatewayId": payload.get("gatewayId", "GW_BOGIE_001"),
+        "trainId": payload.get("trainId", "TRAIN_07"),
+        "sessionName": payload.get("sessionName", "SMS_TEST_SESSION"),
+        "routeName": payload.get("routeName", "DEFAULT"),
+        "speedKmph": float(payload.get("speedKmph", 90)),
+        "peakG": float(payload.get("peakG", payload.get("peak", 95))),
+        "gps": payload.get("gps", {"lat": 12.9712, "lon": 77.5912}),
+    }
+    logs = send_sms_notification(alert_doc, payload.get("message"))
+    return {
+        "status": "success",
+        "smsProviderStatus": sms_provider_status(),
+        "smsEnabled": SMS_ENABLED,
+        "logs": clean_for_mongo(logs),
     }
 
 
@@ -3266,6 +3388,14 @@ def alerts_page(request: Request):
     return templates.TemplateResponse(
         request,
         "alerts.html",
+    )
+
+
+@app.get("/sms-page")
+def sms_page(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "sms_server.html",
     )
 
 
