@@ -443,11 +443,15 @@ canvas {
     background: #080d17;
     color: #d8e7ff;
     font-family: Arial, Helvetica, sans-serif;
+    height: 100vh;
+    margin: 0;
+    overflow: hidden;
 }
 
 .monitor-shell {
     width: 100%;
-    min-height: 100vh;
+    height: 100vh;
+    overflow: hidden;
     padding: 0;
 }
 
@@ -456,7 +460,7 @@ canvas {
     align-items: center;
     justify-content: space-between;
     gap: 14px;
-    min-height: 36px;
+    height: 32px;
     border-bottom: 1px solid #243149;
     background: #111827;
     padding: 0 18px;
@@ -467,7 +471,7 @@ canvas {
     align-items: center;
     gap: 10px;
     color: #e7f0ff;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 700;
     letter-spacing: .04em;
     text-transform: uppercase;
@@ -484,11 +488,12 @@ canvas {
 
 .monitor-header .nav-link,
 .monitor-header button {
-    min-height: 30px;
+    min-height: 24px;
     border: 1px solid #263956;
     background: #172640;
     color: #d8e7ff;
-    padding: 0 12px;
+    font-size: 12px;
+    padding: 0 10px;
 }
 
 .monitor-alert {
@@ -496,8 +501,10 @@ canvas {
     background: #0c1424;
     color: #94b7e8;
     font-weight: 700;
-    margin: 10px 16px;
-    padding: 10px 14px;
+    margin: 6px 12px;
+    min-height: 20px;
+    padding: 5px 10px;
+    font-size: 12px;
 }
 
 .monitor-alert.is-active {
@@ -508,27 +515,33 @@ canvas {
 
 .monitor-layout {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 294px;
-    gap: 16px;
-    padding: 14px 16px 10px;
+    grid-template-columns: minmax(0, 1fr) 268px;
+    gap: 10px;
+    height: calc(100vh - 72px);
+    padding: 6px 12px 8px;
+    overflow: hidden;
 }
 
 .rms-stack {
     display: grid;
-    gap: 18px;
+    grid-template-rows: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+    min-height: 0;
 }
 
 .rms-panel {
-    min-height: 278px;
+    min-height: 0;
     border-bottom: 1px solid #243149;
     background: linear-gradient(180deg, #0b111d 0%, #090f19 100%);
-    padding: 10px 14px 4px;
+    padding: 4px 10px 2px;
+    overflow: hidden;
 }
 
 .rms-panel h2 {
-    margin: 0 0 4px;
+    margin: 0;
     text-align: center;
-    font-size: 14px;
+    font-size: 12px;
+    line-height: 1.2;
 }
 
 .rms-panel.x-axis h2 {
@@ -545,22 +558,24 @@ canvas {
 
 .rms-panel canvas {
     width: 100%;
-    height: 236px;
+    height: calc(100% - 16px);
 }
 
 .gateway-panel {
     display: grid;
     align-content: start;
-    gap: 14px;
+    gap: 6px;
     border-left: 1px solid #1d2c45;
     background: #090f19;
-    padding-left: 18px;
+    max-height: 100%;
+    overflow: hidden;
+    padding-left: 10px;
 }
 
 .gateway-panel h2 {
-    margin: 4px 0 0;
+    margin: 0;
     color: #e7f0ff;
-    font-size: 14px;
+    font-size: 12px;
     text-transform: uppercase;
 }
 
@@ -568,7 +583,7 @@ canvas {
     display: flex;
     gap: 12px;
     color: #5f83b1;
-    font-size: 12px;
+    font-size: 10px;
 }
 
 .gateway-leds span {
@@ -587,47 +602,53 @@ canvas {
     border: 1px solid #20314d;
     border-radius: 4px;
     background: #0d1423;
-    padding: 10px;
+    padding: 6px 8px;
 }
 
 .gateway-card h3 {
-    margin: 0 0 8px;
+    margin: 0 0 4px;
     color: #6387b8;
-    font-size: 12px;
+    font-size: 10px;
 }
 
 .gateway-card p {
     display: flex;
     justify-content: space-between;
-    margin: 7px 0;
+    margin: 3px 0;
     color: #6387b8;
-    font-size: 11px;
+    font-size: 10px;
 }
 
 .gateway-card strong {
     color: #e7f0ff;
 }
 
+.gateway-calibration label:nth-of-type(n+5) {
+    display: none;
+}
+
 .gateway-card label {
     color: #6387b8;
-    font-size: 11px;
-    margin-bottom: 6px;
+    font-size: 10px;
+    margin-bottom: 3px;
 }
 
 .gateway-card input,
 .gateway-card select {
-    min-height: 28px;
+    min-height: 22px;
     border-color: #263956;
     border-radius: 2px;
     background: #111b2d;
     color: #e7f0ff;
-    font-size: 12px;
+    font-size: 10px;
+    padding: 2px 6px;
 }
 
 .gateway-card button {
     width: 100%;
-    min-height: 32px;
-    margin-top: 8px;
+    min-height: 24px;
+    margin-top: 5px;
+    font-size: 10px;
 }
 
 .blue-action {
@@ -643,23 +664,24 @@ canvas {
 }
 
 .dark-log {
-    min-height: 52px;
+    height: 42px;
     border: 1px solid #1f304c;
     background: #111827;
     color: #94b7e8;
-    font-size: 11px;
-    line-height: 1.35;
+    font-size: 10px;
+    line-height: 1.25;
     overflow: auto;
-    padding: 8px;
+    padding: 5px;
     white-space: pre-wrap;
 }
 
 .monitor-table-card {
-    margin: 14px 16px 24px;
+    display: none;
+    margin: 0 12px 8px;
     border: 1px solid #20314d;
     border-radius: 6px;
     background: #0d1423;
-    padding: 16px;
+    padding: 8px;
 }
 
 .monitor-table-card table {
