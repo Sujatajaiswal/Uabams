@@ -41,10 +41,6 @@ services:
         value: "UABAMS"
       - key: SMS_TO_NUMBERS
         value: ""
-      - key: MONGODB_URL
-        value: ""
-      - key: MONGODB_DB_NAME
-        value: "uabams_cloud"
 
   - type: web
     name: uabams-frontend
