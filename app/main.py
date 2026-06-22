@@ -20,6 +20,14 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel, Field
 
+try:
+    from pymongo import MongoClient
+    from pymongo.errors import PyMongoError
+except Exception:  # pragma: no cover - keeps PostgreSQL-only deployments usable
+    MongoClient = None
+    PyMongoError = Exception
+
+
 app = FastAPI(title="UABAMS Cloud", docs_url=None)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
@@ -80,6 +88,10 @@ FIXED_RECORD_SIZES = {
     "peak/peak_50m.bin": 302,
     "faults/faults.bin": 75,
 }
+MONGODB_URL = os.getenv("MONGODB_URL", "")
+MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "uabams_cloud")
+_mongo_client = None
+
 
 CSV_REPORTS = {
     "archives": {
@@ -304,6 +316,86 @@ def database_host():
 
 def utc_now():
     return datetime.utcnow()
+
+
+def mongo_enabled():
+    return bool(MONGODB_URL) and MongoClient is not None
+
+
+def get_mongo_db():
+    global _mongo_client
+    if not mongo_enabled():
+        return None
+    if _mongo_client is None:
+        _mongo_client = MongoClient(MONGODB_URL, serverSelectionTimeoutMS=5000)
+    return _mongo_client[MONGODB_DB_NAME]
+
+
+def clean_for_mongo(value):
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, bytes):
+        return {"byteLength": len(value), "sha256": hashlib.sha256(value).hexdigest()}
+    if isinstance(value, dict):
+        return {str(key): clean_for_mongo(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [clean_for_mongo(item) for item in value]
+    return value
+
+
+def mongo_insert(collection_name: str, document: dict):
+    if not mongo_enabled():
+        return None
+    db = get_mongo_db()
+    prepared = clean_for_mongo(document)
+    prepared.setdefault("createdAt", utc_now().isoformat())
+    try:
+        result = db[collection_name].insert_one(prepared)
+        return str(result.inserted_id)
+    except PyMongoError as exc:
+        return {"error": str(exc)}
+
+
+def mongo_storage_summary(limit: int = 5):
+    safe_limit = max(1, min(limit, 50))
+    summary = {
+        "configured": bool(MONGODB_URL),
+        "driverAvailable": MongoClient is not None,
+        "database": MONGODB_DB_NAME,
+        "collections": {},
+    }
+    if not mongo_enabled():
+        summary["status"] = "not_configured"
+        summary["message"] = "Set MONGODB_URL in Render environment variables to enable MongoDB Atlas storage."
+        return summary
+    try:
+        db = get_mongo_db()
+        db.command("ping")
+        for name in [
+            "gateway_archives",
+            "raw_gateway_payloads",
+            "archive_uploads",
+            "alert_notifications",
+            "sms_logs",
+        ]:
+            collection = db[name]
+            rows = list(collection.find({}, {"_id": 0}).sort("createdAt", -1).limit(safe_limit))
+            summary["collections"][name] = {
+                "count": collection.count_documents({}),
+                "latest": clean_for_mongo(rows),
+            }
+        summary["status"] = "connected"
+    except PyMongoError as exc:
+        summary["status"] = "error"
+        summary["error"] = str(exc)
+    return summary
+
+
+def mirror_archive_to_mongo(payload: dict):
+    return mongo_insert("archive_uploads", payload)
+
 
 
 def extract_archive_filename(request: Request, filename: Optional[str]):
@@ -1913,9 +2005,24 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
         conn.commit()
 
     status_code = 201 if validation["validation_status"] != "quarantined" else 422
+    mongo_archive_id = mirror_archive_to_mongo({
+        "archiveId": archive_id,
+        "sessionId": session_id,
+        "archiveName": archive_name,
+        "gatewayId": filename_parts["gateway_id"],
+        "trainId": filename_parts["train_id"],
+        "sessionName": filename_parts["session_name"],
+        "archiveSizeBytes": archive_size,
+        "checksum": checksum,
+        "validationStatus": validation["validation_status"],
+        "validationErrors": validation["validation_errors"],
+        "storedArchive": str(archive_path),
+        "receivedAt": upload_time,
+    })
     return JSONResponse(
         status_code=status_code,
         content={
+            "mongoArchiveId": mongo_archive_id,
             "status": "success" if status_code == 201 else "error",
             "message": "Archive received",
             "archiveId": archive_id,
@@ -1943,6 +2050,92 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
             "stored_archive": str(archive_path),
         },
     )
+
+
+@app.get("/api/v1/mongodb-storage")
+def get_mongodb_storage(limit: int = 5):
+    return mongo_storage_summary(limit)
+
+
+@app.post("/api/v1/mongodb-demo-upload")
+async def mongodb_demo_upload(request: Request):
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
+
+    gateway_id = payload.get("gatewayId") or payload.get("gateway_id") or "GW_BOGIE_001"
+    train_id = payload.get("trainId") or payload.get("train_id") or "TRAIN_07"
+    session_name = payload.get("sessionName") or payload.get("sessionId") or payload.get("session_id") or "MONGO_DEMO_SESSION"
+    speed_kmph = float(payload.get("speedKmph") or payload.get("speed_kmph") or 0)
+    peak_g = float(payload.get("peak") or payload.get("peakG") or payload.get("peak_g") or 0)
+    gps = payload.get("gps") or {}
+    lat = gps.get("lat") or payload.get("lat") or payload.get("latitude")
+    lon = gps.get("lon") or payload.get("lon") or payload.get("longitude")
+    route_name = payload.get("route") or payload.get("routeName") or "DEFAULT"
+
+    received_at = utc_now().isoformat()
+    gateway_document = {
+        "source": "render-demo-json",
+        "gatewayId": gateway_id,
+        "trainId": train_id,
+        "sessionName": session_name,
+        "routeName": route_name,
+        "speedKmph": speed_kmph,
+        "peakG": peak_g,
+        "gps": {"lat": lat, "lon": lon},
+        "receivedAt": received_at,
+        "payload": payload,
+    }
+
+    inserted = {
+        "gateway_archives": mongo_insert("gateway_archives", gateway_document),
+        "raw_gateway_payloads": mongo_insert("raw_gateway_payloads", {
+            "source": "render-demo-json",
+            "gatewayId": gateway_id,
+            "trainId": train_id,
+            "sessionName": session_name,
+            "receivedAt": received_at,
+            "payload": payload,
+        }),
+    }
+
+    alerts_generated = 0
+    if speed_kmph >= ALERT_SPEED_LIMIT_KMPH and peak_g > 0:
+        alerts_generated = 1
+        message = (
+            f"UABAMS alert: {train_id} peak {peak_g:.2f}g at {speed_kmph:.2f} kmph "
+            f"near GPS {lat}, {lon}"
+        )
+        alert_doc = {
+            "gatewayId": gateway_id,
+            "trainId": train_id,
+            "sessionName": session_name,
+            "routeName": route_name,
+            "speedKmph": speed_kmph,
+            "peakG": peak_g,
+            "thresholdSpeedKmph": ALERT_SPEED_LIMIT_KMPH,
+            "gps": {"lat": lat, "lon": lon},
+            "message": message,
+            "receivedAt": received_at,
+        }
+        inserted["alert_notifications"] = mongo_insert("alert_notifications", alert_doc)
+        inserted["sms_logs"] = mongo_insert("sms_logs", {
+            **alert_doc,
+            "recipient": os.getenv("SMS_TO_NUMBERS", "NOT_CONFIGURED"),
+            "status": "skipped" if not os.getenv("SMS_ENABLED") else "queued",
+            "provider": os.getenv("SMS_PROVIDER_URL", "not_configured"),
+        })
+
+    return {
+        "status": "success",
+        "message": "Demo gateway data stored in MongoDB Atlas" if mongo_enabled() else "MongoDB is not configured on this deployment",
+        "mongoEnabled": mongo_enabled(),
+        "database": MONGODB_DB_NAME,
+        "inserted": inserted,
+        "alertsGenerated": alerts_generated,
+        "storageView": "/api/v1/mongodb-storage",
+    }
 
 
 @app.get("/api/v1/archives")
