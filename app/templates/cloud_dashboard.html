@@ -64,7 +64,7 @@
             <article class="report-row">
                 <div>
                     <strong>Server Receives</strong>
-                    <small>HTTP PUT /api/v1/archive with raw ZIP bytes named &lt;gatewayId&gt;__&lt;trainId&gt;__&lt;sessionName&gt;.zip, plus optional POST /api/v1/alerts JSON alert events.</small>
+                    <small>HTTP PUT /api/v1/archive with raw ZIP bytes named &lt;gatewayId&gt;__&lt;trainId&gt;__&lt;sessionName&gt;.zip, plus optional POST /api/v1/alert JSON alert events.</small>
                 </div>
             </article>
             <article class="report-row">
@@ -230,7 +230,7 @@
         <div class="section-title-row">
             <div>
                 <h2>Parsed RMS 25cm Records</h2>
-                <p class="helper-text">Parsed from rms/rms_25cm.bin fixed 66-byte records.</p>
+                <p class="helper-text">Parsed from rms/rms_25cm.bin fixed 70-byte records with float RMS values in g.</p>
             </div>
             <a class="nav-link" href="/csv/download/rms-records">Download ASCII</a>
         </div>
@@ -343,7 +343,7 @@
         <div class="section-title-row">
             <div>
                 <h2>Realtime Alert Events</h2>
-                <p class="helper-text">Received through POST /api/v1/alerts when gateway sends alert event JSON.</p>
+                <p class="helper-text">Received through POST /api/v1/alert when gateway sends alert event JSON.</p>
             </div>
             <a class="nav-link" href="/csv/download/cloud-alert-events">Download ASCII</a>
         </div>

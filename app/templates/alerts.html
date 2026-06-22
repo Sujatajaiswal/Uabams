@@ -1,47 +1,107 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Alert Map</title>
+    <title>UABAMS RMS Alert Dashboard</title>
     <link rel="stylesheet" href="/static/style.css">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 </head>
 
-<body>
-<main class="shell">
-    <header class="page-header">
-        <div>
-            <p class="eyebrow">Realtime Monitoring</p>
-            <h1>Alert Map</h1>
+<body class="monitor-body">
+<main class="monitor-shell">
+    <header class="monitor-header">
+        <div class="monitor-title">
+            <span class="status-dot"></span>
+            <strong>UABAMS</strong>
+            <span>RMS Vibration vs Distance</span>
         </div>
         <div class="header-actions">
             <button type="button" id="notification-button">Enable Notifications</button>
+            <button type="button" onclick="loadMonitoring(true)">Refresh</button>
             <a class="nav-link" href="/dashboard">Dashboard</a>
         </div>
     </header>
 
-    <section id="alert-notification" class="alert-banner">
-        Waiting for gateway alerts above 80 kmph.
+    <section id="alert-notification" class="monitor-alert">
+        Waiting for speed-gated alerts above 80 kmph.
     </section>
 
-    <section class="panel">
-        <div class="section-title-row">
-            <div>
-                <h2>Gateway Alert Location</h2>
-                <p class="helper-text">
-                    Alerts are shown when the gateway peak window is over the 80 kmph speed gate and one or more vibration axes cross the configured threshold. GPS latitude/longitude is used for the map. If multiple peaks cross limits in the same 50 m window, only the highest vertical and highest lateral alerts are shown separately.
-                </p>
-            </div>
-            <button type="button" onclick="loadAlerts(true)">Refresh Alerts</button>
-        </div>
-        <div class="alert-visual-grid">
-            <div class="chart-panel">
-                <canvas id="alert-chart"></canvas>
-            </div>
-            <div id="alert-map" class="map-panel"></div>
-        </div>
-    </section>
+    <div class="monitor-layout">
+        <section class="rms-stack">
+            <article class="rms-panel x-axis">
+                <h2>X Axis - RMS Acceleration</h2>
+                <canvas id="x-chart"></canvas>
+            </article>
+            <article class="rms-panel y-axis">
+                <h2>Y Axis - RMS Acceleration</h2>
+                <canvas id="y-chart"></canvas>
+            </article>
+            <article class="rms-panel z-axis">
+                <h2>Z Axis - RMS Acceleration</h2>
+                <canvas id="z-chart"></canvas>
+            </article>
+        </section>
 
-    <section class="panel">
+        <aside class="gateway-panel">
+            <h2>Gateway Dashboard</h2>
+            <div class="gateway-leds">
+                <span><i></i> ADXL</span>
+                <span><i></i> ENC</span>
+            </div>
+
+            <section class="gateway-card">
+                <h3>ADXL Node</h3>
+                <p>State: <strong id="adxl-state">RUNNING</strong></p>
+                <p>Uptime: <strong id="adxl-uptime">342 s</strong></p>
+                <p>Faults: <strong id="adxl-faults">0</strong></p>
+                <p>FW Version: <strong>0x40</strong></p>
+                <p>Cal Version: <strong>1</strong></p>
+            </section>
+
+            <section class="gateway-card">
+                <h3>Encoder Node</h3>
+                <p>State: <strong id="encoder-state">RUNNING</strong></p>
+                <p>Uptime: <strong id="encoder-uptime">393 s</strong></p>
+                <p>Faults: <strong id="encoder-faults">0</strong></p>
+                <p>FW Version: <strong>0x10</strong></p>
+                <p>Cal Version: <strong>1</strong></p>
+            </section>
+
+            <section class="gateway-card">
+                <h3>Gateway Actions</h3>
+                <button type="button" class="blue-action">Ping Nodes</button>
+                <button type="button" class="red-action">Reset Nodes</button>
+            </section>
+
+            <section class="gateway-card">
+                <h3>Calibration Updates</h3>
+                <label>Target Node
+                    <select>
+                        <option>ADXL Node (0x01)</option>
+                        <option>Encoder Node (0x04)</option>
+                    </select>
+                </label>
+                <label>Version <input value="1"></label>
+                <label>Scale X (Q16) <input value="65536"></label>
+                <label>Scale Y (Q16) <input value="65536"></label>
+                <label>Scale Z (Q16) <input value="65536"></label>
+                <label>Offset X <input value="0"></label>
+                <label>Offset Y <input value="0"></label>
+                <label>Offset Z <input value="0"></label>
+                <button type="button" class="green-action">Send Calibration</button>
+            </section>
+
+            <section class="gateway-card">
+                <h3>Fault Log</h3>
+                <div id="fault-log" class="dark-log"></div>
+            </section>
+
+            <section class="gateway-card">
+                <h3>Gateway Activity Log</h3>
+                <div id="activity-log" class="dark-log"></div>
+            </section>
+        </aside>
+    </div>
+
+    <section class="monitor-table-card">
         <h2>Alert Events</h2>
         <div class="table-wrap">
             <table>
@@ -53,8 +113,8 @@
                         <th>Window</th>
                         <th>Speed</th>
                         <th>Axis</th>
-                        <th>Peak mg</th>
-                        <th>Threshold mg</th>
+                        <th>Peak g</th>
+                        <th>Threshold g</th>
                         <th>Location</th>
                         <th>Received At</th>
                     </tr>
@@ -66,183 +126,188 @@
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const speedGateKmph = 80;
-const defaultCenter = [12.97, 77.59];
 const notificationButton = document.getElementById("notification-button");
 const notificationBanner = document.getElementById("alert-notification");
-let map;
-let markersLayer;
-let alertChart;
+const charts = {};
 
-function initMap() {
-    map = L.map("alert-map").setView(defaultCenter, 13);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        attribution: "&copy; OpenStreetMap contributors"
-    }).addTo(map);
-    markersLayer = L.layerGroup().addTo(map);
+function formatNumber(value, digits = 2) {
+    if (value === null || value === undefined || value === "" || Number.isNaN(Number(value))) return "-";
+    return Number(value).toFixed(digits);
 }
 
-function initChart() {
-    const context = document.getElementById("alert-chart").getContext("2d");
-    alertChart = new Chart(context, {
-        type: "bar",
+function axisLabel(axis) {
+    return String(axis || "-").replaceAll("_", " ").toUpperCase();
+}
+
+function colorFor(axis) {
+    return axis === "x" ? "#ff5b5b" : axis === "y" ? "#54e078" : "#3aa7ff";
+}
+
+function makeDemoRecords() {
+    const records = [];
+    for (let i = 0; i < 520; i += 1) {
+        const distanceKm = i * 0.0025;
+        const pulse = Math.sin(i / 22) * 0.15;
+        let xG = 0.35 + Math.random() * 0.18 + pulse;
+        let yG = 0.28 + Math.random() * 0.16;
+        let zG = 0.22 + Math.random() * 0.12;
+        if ([34, 217, 242, 466, 482].includes(i)) xG += 7 + Math.random() * 5;
+        if ([86, 188, 410, 414].includes(i)) yG += 7 + Math.random() * 8;
+        if ([174, 280, 486, 500].includes(i)) zG += 3 + Math.random() * 5;
+        records.push({ distanceKm, xG, yG, zG, xAlert: xG > 8, yAlert: yG > 8, zAlert: zG > 5 });
+    }
+    return {
+        threshold: { lateralG: 8, verticalG: 5, alertSpeedKmph: 80, demo: true },
+        records
+    };
+}
+
+function buildChart(axis, title, thresholdG) {
+    const context = document.getElementById(`${axis}-chart`).getContext("2d");
+    charts[axis] = new Chart(context, {
+        type: "line",
         data: {
             labels: [],
             datasets: [
                 {
-                    type: "bar",
-                    label: "Peak mg",
+                    label: `${axis.toUpperCase()} RMS g`,
                     data: [],
-                    backgroundColor: "#c2410c",
-                    borderRadius: 4
+                    borderColor: colorFor(axis),
+                    backgroundColor: colorFor(axis),
+                    borderWidth: 1.8,
+                    pointRadius: 0,
+                    tension: 0.1
                 },
                 {
-                    type: "line",
-                    label: "Threshold mg",
+                    type: "scatter",
+                    label: "Alert peak",
                     data: [],
-                    borderColor: "#16636b",
-                    backgroundColor: "#16636b",
-                    borderWidth: 2,
-                    pointRadius: 4,
-                    tension: 0.25
+                    borderColor: "#ff4a4a",
+                    backgroundColor: "#ff4a4a",
+                    pointRadius: 5,
+                    pointHoverRadius: 7
                 },
                 {
-                    type: "line",
-                    label: "Speed kmph",
+                    label: "Threshold",
                     data: [],
-                    borderColor: "#7a5a00",
-                    backgroundColor: "#7a5a00",
-                    borderDash: [6, 4],
-                    borderWidth: 2,
-                    pointRadius: 3,
-                    yAxisID: "speed"
+                    borderColor: "#8b6b08",
+                    backgroundColor: "#8b6b08",
+                    borderDash: [6, 5],
+                    borderWidth: 1,
+                    pointRadius: 0
                 }
             ]
         },
         options: {
+            animation: false,
             maintainAspectRatio: false,
             responsive: true,
             plugins: {
-                legend: { position: "bottom" },
-                tooltip: { mode: "index", intersect: false }
+                legend: { display: false },
+                title: {
+                    display: true,
+                    text: title,
+                    color: colorFor(axis),
+                    font: { size: 14, weight: "bold" }
+                }
             },
             scales: {
+                x: {
+                    title: { display: true, text: "Distance (km)", color: "#5f83b1" },
+                    ticks: { color: "#5f83b1", maxTicksLimit: 12 },
+                    grid: { color: "rgba(58, 83, 122, 0.18)" }
+                },
                 y: {
                     beginAtZero: true,
-                    title: { display: true, text: "Acceleration peak (mg)" }
-                },
-                speed: {
-                    beginAtZero: true,
-                    position: "right",
-                    grid: { drawOnChartArea: false },
-                    title: { display: true, text: "Speed (kmph)" }
-                },
-                x: {
-                    ticks: { maxRotation: 0, autoSkip: false }
+                    title: { display: true, text: "RMS (g)", color: "#5f83b1" },
+                    ticks: { color: "#5f83b1" },
+                    grid: { color: "rgba(58, 83, 122, 0.2)" },
+                    suggestedMax: thresholdG * 1.25
                 }
             }
         }
     });
 }
 
-function formatNumber(value, digits = 2) {
-    if (value === null || value === undefined || value === "") {
-        return "-";
-    }
-    return Number(value).toFixed(digits);
+function initCharts() {
+    buildChart("x", "X Axis - RMS Acceleration", 8);
+    buildChart("y", "Y Axis - RMS Acceleration", 8);
+    buildChart("z", "Z Axis - RMS Acceleration", 5);
 }
 
-function axisLabel(axis) {
-    return (axis || "-").replaceAll("_", " ").toUpperCase();
-}
+function updateChart(axis, records, thresholdG) {
+    const key = `${axis}G`;
+    const alertKey = `${axis}Alert`;
+    const points = records.map(record => ({
+        x: Number(record.distanceKm),
+        y: Number(record[key] || 0)
+    }));
+    const alerts = records
+        .filter(record => record[alertKey])
+        .map(record => ({ x: Number(record.distanceKm), y: Number(record[key] || 0) }));
 
-function axisGroup(axisName, alertType) {
-    if (alertType === "VERTICAL" || alertType === "LATERAL") {
-        return alertType;
-    }
-    const normalized = String(axisName || "").toLowerCase();
-    if (normalized.endsWith("_z")) {
-        return "VERTICAL";
-    }
-    if (normalized.endsWith("_x") || normalized.endsWith("_y")) {
-        return "LATERAL";
-    }
-    return "";
-}
-
-function highestVerticalAndLateralAxes(axes) {
-    const highest = {};
-    axes.forEach(axis => {
-        const group = axisGroup(axis.axisName, axis.alertType);
-        const peak = Number(axis.peakValueMg);
-        const threshold = Number(axis.thresholdMg);
-        if (!group || !Number.isFinite(peak) || !Number.isFinite(threshold) || peak <= threshold) {
-            return;
-        }
-        const current = highest[group];
-        if (!current || Math.abs(peak) > Math.abs(Number(current.peakValueMg || 0))) {
-            highest[group] = { ...axis, alertType: group };
-        }
-    });
-    return ["VERTICAL", "LATERAL"].filter(group => highest[group]).map(group => highest[group]);
+    charts[axis].data.datasets[0].data = points;
+    charts[axis].data.datasets[1].data = alerts;
+    charts[axis].data.datasets[2].data = records.map(record => ({ x: Number(record.distanceKm), y: thresholdG }));
+    charts[axis].options.scales.y.suggestedMax = Math.max(thresholdG * 1.25, ...points.map(point => point.y)) + 1;
+    charts[axis].update();
 }
 
 function normalizeCloudAlert(row) {
-    const axes = highestVerticalAndLateralAxes(row.triggered_axes || []);
-    if (!axes.length) {
-        return [];
-    }
+    const axes = row.triggered_axes || [];
     return axes.map(axis => ({
-        id: row.alert_event_id,
+        id: `${row.alert_event_id}-${axis.axisName}`,
         gateway: row.gateway_id,
         train: row.train_id,
         session: row.session_name,
         window: `${row.window_start_mm} - ${row.window_end_mm} mm`,
         speed: row.speed_kmph,
         axis: axis.axisName || axis.alertType || "-",
-        peak: axis.peakValueMg,
-        threshold: axis.thresholdMg,
+        peakG: Number(axis.peakValueMg || 0) / 1000,
+        thresholdG: Number(axis.thresholdMg || 0) / 1000,
         latitude: axis.peakLat ?? row.latitude,
         longitude: axis.peakLon ?? row.longitude,
         received: row.received_utc
     }));
 }
 
-function normalizeLegacyAlert(row) {
-    return [{
-        id: `legacy-${row.id || row.created_at}`,
-        gateway: "-",
-        train: row.train_no,
-        session: row.route_name || "-",
-        window: `${row.km_marker ?? "-"} km / ${row.meter ?? "-"} m`,
-        speed: row.speed_kmph,
-        axis: row.alert_type,
-        peak: row.measured_value,
-        threshold: row.threshold_value,
-        latitude: row.latitude,
-        longitude: row.longitude,
-        received: row.created_at
-    }];
+async function fetchAlerts() {
+    const response = await fetch("/api/v1/alerts?limit=50");
+    if (!response.ok) return [];
+    const rows = await response.json();
+    return rows.flatMap(normalizeCloudAlert);
 }
 
-async function fetchAlerts() {
-    const cloudResponse = await fetch("/api/v1/alerts?limit=50");
-    if (cloudResponse.ok) {
-        const cloudRows = await cloudResponse.json();
-        if (cloudRows.length) {
-            return cloudRows.flatMap(normalizeCloudAlert);
-        }
-    }
+async function fetchRmsSeries() {
+    const response = await fetch("/api/v1/rms-series?limit=1500");
+    if (!response.ok) return makeDemoRecords();
+    const data = await response.json();
+    if (!data.records || !data.records.length) return makeDemoRecords();
+    return data;
+}
 
-    const legacyResponse = await fetch("/alerts");
-    if (!legacyResponse.ok) {
-        return [];
+function alertsFromRmsSeries(series) {
+    const threshold = series.threshold || {};
+    const records = series.records || [];
+    const alertRows = [];
+    for (const record of records) {
+        const base = {
+            gateway: record.gatewayId || "GW_BOGIE_001",
+            train: record.trainId || "TRAIN_07",
+            session: record.sessionName || "DEMO_SESSION",
+            window: `${record.positionMm || Math.round(Number(record.distanceKm || 0) * 1000000)} mm`,
+            speed: record.speedKmph || 90,
+            latitude: record.latitude || 12.9712,
+            longitude: record.longitude || 77.5912,
+            received: "generated from RMS"
+        };
+        if (record.xAlert) alertRows.push({ ...base, id: `rms-${record.recordIndex}-x`, axis: "x", peakG: record.xG, thresholdG: threshold.lateralG || 80 });
+        if (record.yAlert) alertRows.push({ ...base, id: `rms-${record.recordIndex}-y`, axis: "y", peakG: record.yG, thresholdG: threshold.lateralG || 80 });
+        if (record.zAlert) alertRows.push({ ...base, id: `rms-${record.recordIndex}-z`, axis: "z", peakG: record.zG, thresholdG: threshold.verticalG || 50 });
     }
-    const legacyRows = await legacyResponse.json();
-    return legacyRows.flatMap(normalizeLegacyAlert);
+    return alertRows.sort((a, b) => Number(b.peakG || 0) - Number(a.peakG || 0)).slice(0, 12);
 }
 
 function renderTable(alerts) {
@@ -251,7 +316,6 @@ function renderTable(alerts) {
         body.innerHTML = "<tr><td colspan=\"10\">No alert events received yet.</td></tr>";
         return;
     }
-
     body.innerHTML = alerts.map(alert => `
         <tr>
             <td>${alert.gateway || "-"}</td>
@@ -260,77 +324,28 @@ function renderTable(alerts) {
             <td>${alert.window || "-"}</td>
             <td>${formatNumber(alert.speed)} kmph</td>
             <td><span class="badge">${axisLabel(alert.axis)}</span></td>
-            <td>${formatNumber(alert.peak, 0)}</td>
-            <td>${formatNumber(alert.threshold, 0)}</td>
+            <td>${formatNumber(alert.peakG, 3)}</td>
+            <td>${formatNumber(alert.thresholdG, 3)}</td>
             <td>${formatNumber(alert.latitude, 6)}, ${formatNumber(alert.longitude, 6)}</td>
             <td>${alert.received || "-"}</td>
         </tr>
     `).join("");
 }
 
-function renderMap(alerts) {
-    markersLayer.clearLayers();
-    const validAlerts = alerts.filter(alert =>
-        Number.isFinite(Number(alert.latitude)) && Number.isFinite(Number(alert.longitude))
-    );
-
-    if (!validAlerts.length) {
-        map.setView(defaultCenter, 13);
-        return;
-    }
-
-    const bounds = [];
-    validAlerts.forEach(alert => {
-        const position = [Number(alert.latitude), Number(alert.longitude)];
-        bounds.push(position);
-        L.marker(position).addTo(markersLayer).bindPopup(`
-            <strong>${axisLabel(alert.axis)} Alert</strong><br>
-            Train: ${alert.train || "-"}<br>
-            Speed: ${formatNumber(alert.speed)} kmph<br>
-            Peak: ${formatNumber(alert.peak, 0)} mg<br>
-            Threshold: ${formatNumber(alert.threshold, 0)} mg
-        `);
-    });
-
-    if (bounds.length === 1) {
-        map.setView(bounds[0], 15);
-    } else {
-        map.fitBounds(bounds, { padding: [30, 30] });
-    }
-}
-
-function renderChart(alerts) {
-    const chartAlerts = alerts
-        .filter(alert => Number.isFinite(Number(alert.peak)) || Number.isFinite(Number(alert.threshold)))
-        .slice(0, 10)
-        .reverse();
-
-    alertChart.data.labels = chartAlerts.map(alert => axisLabel(alert.axis));
-    alertChart.data.datasets[0].data = chartAlerts.map(alert => Number(alert.peak || 0));
-    alertChart.data.datasets[1].data = chartAlerts.map(alert => Number(alert.threshold || 0));
-    alertChart.data.datasets[2].data = chartAlerts.map(alert => Number(alert.speed || 0));
-    alertChart.update();
-}
-
 function buildAlertMessage(alert) {
-    const gpsText = Number.isFinite(Number(alert.latitude)) && Number.isFinite(Number(alert.longitude))
-        ? `GPS ${formatNumber(alert.latitude, 6)}, ${formatNumber(alert.longitude, 6)}`
-        : "GPS unavailable";
-    return `${axisLabel(alert.axis)} alert on ${alert.train || "train"} | Peak ${formatNumber(alert.peak, 0)} mg > ${formatNumber(alert.threshold, 0)} mg | Speed ${formatNumber(alert.speed)} kmph | ${gpsText}`;
+    return `${axisLabel(alert.axis)} alert on ${alert.train || "train"} at ${formatNumber(alert.speed)} kmph | Peak ${formatNumber(alert.peakG, 3)}g > ${formatNumber(alert.thresholdG, 3)}g`;
 }
 
 function showLatestNotification(alerts, force = false) {
     const latest = alerts.find(alert => Number(alert.speed) >= speedGateKmph);
     if (!latest) {
-        notificationBanner.textContent = "No speed-gated alert above 80 kmph is active.";
+        notificationBanner.textContent = "No active speed-gated alert above 80 kmph.";
         notificationBanner.classList.remove("is-active");
         return;
     }
-
     const message = buildAlertMessage(latest);
     notificationBanner.textContent = message;
     notificationBanner.classList.add("is-active");
-
     const lastSeen = localStorage.getItem("uabams_latest_alert_id");
     if (force || String(latest.id) !== lastSeen) {
         localStorage.setItem("uabams_latest_alert_id", latest.id);
@@ -340,12 +355,24 @@ function showLatestNotification(alerts, force = false) {
     }
 }
 
-async function loadAlerts(forceNotification = false) {
-    const alerts = await fetchAlerts();
-    renderTable(alerts);
-    renderChart(alerts);
-    renderMap(alerts);
-    showLatestNotification(alerts, forceNotification);
+function renderGatewayPanel(series, alerts) {
+    const latest = series.records[series.records.length - 1] || {};
+    document.getElementById("activity-log").textContent =
+        `Latest session: ${latest.sessionName || "demo"}\nRoute: ${latest.routeName || "DEFAULT"}\nRecords loaded: ${series.records.length}\nCloud: Render`;
+    document.getElementById("fault-log").textContent =
+        alerts.length ? alerts.map(alert => buildAlertMessage(alert)).slice(0, 4).join("\n") : "No active fault alerts.";
+}
+
+async function loadMonitoring(forceNotification = false) {
+    const [series, alerts] = await Promise.all([fetchRmsSeries(), fetchAlerts()]);
+    const threshold = series.threshold || {};
+    const visibleAlerts = alerts.length ? alerts : alertsFromRmsSeries(series);
+    updateChart("x", series.records, threshold.lateralG || 80);
+    updateChart("y", series.records, threshold.lateralG || 80);
+    updateChart("z", series.records, threshold.verticalG || 50);
+    renderTable(visibleAlerts);
+    renderGatewayPanel(series, visibleAlerts);
+    showLatestNotification(visibleAlerts, forceNotification);
 }
 
 notificationButton.addEventListener("click", async () => {
@@ -359,11 +386,9 @@ notificationButton.addEventListener("click", async () => {
         : "Browser notifications were not enabled. In-page alerts will still appear.";
 });
 
-initMap();
-initChart();
-loadAlerts();
-setInterval(loadAlerts, 10000);
+initCharts();
+loadMonitoring();
+setInterval(() => loadMonitoring(false), 30000);
 </script>
-
 </body>
 </html>

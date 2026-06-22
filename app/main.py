@@ -85,7 +85,7 @@ REQUIRED_ARCHIVE_FILES = [
     "raw/encoder.bin",
 ]
 FIXED_RECORD_SIZES = {
-    "rms/rms_25cm.bin": 66,
+    "rms/rms_25cm.bin": 70,
     "peak/peak_50m.bin": 302,
     "faults/faults.bin": 75,
 }
@@ -310,7 +310,7 @@ ASCII transfer format:
 - Null/empty values: blank field
 
 Key record sizes in source binary files:
-- rms/rms_25cm.bin: 66 bytes per record.
+- rms/rms_25cm.bin: 70 bytes per record.
 - peak/peak_50m.bin: 302 bytes per record.
 - faults/faults.bin: 75 bytes per record.
 
@@ -648,8 +648,10 @@ def iter_fixed_records(file_path: Path, record_size: int):
 
 def parse_rms_records(file_path: Path):
     records = []
-    for record_index, raw in iter_fixed_records(file_path, 66) or []:
-        values = struct.unpack_from("<QiddBBIIIIIIIII", raw, 0)
+    for record_index, raw in iter_fixed_records(file_path, FIXED_RECORD_SIZES["rms/rms_25cm.bin"]) or []:
+        values = struct.unpack_from("<QiddBBfffffffff", raw, 0)
+        rms_g = values[6:15]
+        rms_mg = [int(round(value * 1000)) for value in rms_g]
         records.append(
             {
                 "record_index": record_index,
@@ -659,15 +661,15 @@ def parse_rms_records(file_path: Path):
                 "longitude": values[3],
                 "gps_valid": bool(values[4]),
                 "valid_mask": values[5],
-                "al_x_mg": values[6],
-                "al_y_mg": values[7],
-                "al_z_mg": values[8],
-                "ar_x_mg": values[9],
-                "ar_y_mg": values[10],
-                "ar_z_mg": values[11],
-                "bg_x_mg": values[12],
-                "bg_y_mg": values[13],
-                "bg_z_mg": values[14],
+                "al_x_mg": rms_mg[0],
+                "al_y_mg": rms_mg[1],
+                "al_z_mg": rms_mg[2],
+                "ar_x_mg": rms_mg[3],
+                "ar_y_mg": rms_mg[4],
+                "ar_z_mg": rms_mg[5],
+                "bg_x_mg": rms_mg[6],
+                "bg_y_mg": rms_mg[7],
+                "bg_z_mg": rms_mg[8],
             }
         )
     return records
@@ -1633,7 +1635,7 @@ def cloud_status():
             "available_tables": [],
             "schema_ready": False,
             "gateway_archive_endpoint": "/api/v1/archive",
-            "alert_endpoint": "/api/v1/alerts",
+            "alert_endpoint": "/api/v1/alert",
             "measurement_speed_band_kmph": f"{MIN_MEASUREMENT_SPEED_KMPH}-{MAX_MEASUREMENT_SPEED_KMPH}",
             "spatial_sample_interval_m": SPATIAL_SAMPLE_DISTANCE_M,
             "peak_window_distance_m": PEAK_WINDOW_DISTANCE_M,
@@ -1659,7 +1661,7 @@ def cloud_status():
         "available_tables": available_tables,
         "schema_ready": set(required_tables).issubset(set(available_tables)),
         "gateway_archive_endpoint": "/api/v1/archive",
-        "alert_endpoint": "/api/v1/alerts",
+        "alert_endpoint": "/api/v1/alert",
         "measurement_speed_band_kmph": f"{MIN_MEASUREMENT_SPEED_KMPH}-{MAX_MEASUREMENT_SPEED_KMPH}",
         "spatial_sample_interval_m": SPATIAL_SAMPLE_DISTANCE_M,
         "peak_window_distance_m": PEAK_WINDOW_DISTANCE_M,
@@ -2395,6 +2397,12 @@ async def mongodb_demo_upload(request: Request, _: bool = Depends(verify_api_key
     session_name = payload.get("sessionName") or payload.get("sessionId") or payload.get("session_id") or "MONGO_DEMO_SESSION"
     speed_kmph = float(payload.get("speedKmph") or payload.get("speed_kmph") or 0)
     peak_g = float(payload.get("peak") or payload.get("peakG") or payload.get("peak_g") or 0)
+    threshold_g = float(
+        payload.get("threshold")
+        or payload.get("thresholdG")
+        or payload.get("threshold_g")
+        or 50
+    )
     gps = payload.get("gps") or {}
     lat = gps.get("lat") or payload.get("lat") or payload.get("latitude")
     lon = gps.get("lon") or payload.get("lon") or payload.get("longitude")
@@ -2404,9 +2412,9 @@ async def mongodb_demo_upload(request: Request, _: bool = Depends(verify_api_key
     if speed_kmph < MIN_MEASUREMENT_SPEED_KMPH:
         operation_mode = "CALIBRATION_REQUIRED"
         operation_reason = "Speed is below 20 kmph, so wheel/encoder calibration can be reviewed before normal measurement."
-    elif speed_kmph >= ALERT_SPEED_LIMIT_KMPH and peak_g > 0:
+    elif speed_kmph >= ALERT_SPEED_LIMIT_KMPH and peak_g > threshold_g:
         operation_mode = "ALERT_MONITORING"
-        operation_reason = "Speed is at least 80 kmph and peak acceleration is present, so alert/SMS processing is enabled."
+        operation_reason = "Speed is at least 80 kmph and peak acceleration is above the active threshold, so alert processing is enabled."
     else:
         operation_mode = "THRESHOLD_MONITORING"
         operation_reason = "Speed is at least 20 kmph, so route-wise threshold monitoring is active."
@@ -2419,6 +2427,7 @@ async def mongodb_demo_upload(request: Request, _: bool = Depends(verify_api_key
         "routeName": route_name,
         "speedKmph": speed_kmph,
         "peakG": peak_g,
+        "thresholdG": threshold_g,
         "operationMode": operation_mode,
         "operationReason": operation_reason,
         "gps": {"lat": lat, "lon": lon},
@@ -2443,6 +2452,7 @@ async def mongodb_demo_upload(request: Request, _: bool = Depends(verify_api_key
             "routeName": route_name,
             "speedKmph": speed_kmph,
             "peakG": peak_g,
+            "thresholdG": threshold_g,
             "operationMode": operation_mode,
             "operationReason": operation_reason,
             "calibrationSpeedLimitKmph": MIN_MEASUREMENT_SPEED_KMPH,
@@ -2452,10 +2462,10 @@ async def mongodb_demo_upload(request: Request, _: bool = Depends(verify_api_key
     }
 
     alerts_generated = 0
-    if speed_kmph >= ALERT_SPEED_LIMIT_KMPH and peak_g > 0:
+    if speed_kmph >= ALERT_SPEED_LIMIT_KMPH and peak_g > threshold_g:
         alerts_generated = 1
         message = (
-            f"UABAMS alert: {train_id} peak {peak_g:.2f}g at {speed_kmph:.2f} kmph "
+            f"UABAMS alert: {train_id} peak {peak_g:.2f}g crossed {threshold_g:.2f}g at {speed_kmph:.2f} kmph "
             f"near GPS {lat}, {lon}"
         )
         alert_doc = {
@@ -2465,6 +2475,7 @@ async def mongodb_demo_upload(request: Request, _: bool = Depends(verify_api_key
             "routeName": route_name,
             "speedKmph": speed_kmph,
             "peakG": peak_g,
+            "thresholdG": threshold_g,
             "thresholdSpeedKmph": ALERT_SPEED_LIMIT_KMPH,
             "gps": {"lat": lat, "lon": lon},
             "message": message,
@@ -2488,7 +2499,7 @@ async def mongodb_demo_upload(request: Request, _: bool = Depends(verify_api_key
                         "axisName": "bg_z",
                         "alertType": "VERTICAL",
                         "peakValueMg": int(round(peak_g * 1000)),
-                        "thresholdMg": 50000,
+                        "thresholdMg": int(round(threshold_g * 1000)),
                         "peakPositionMm": 1200,
                         "peakLat": lat,
                         "peakLon": lon,
@@ -2691,6 +2702,80 @@ def get_cloud_alert_events(limit: int = 50):
     return [map_alert_event_row(row) for row in rows]
 
 
+@app.get("/api/v1/rms-series")
+def get_rms_series(limit: int = 1200):
+    init_db()
+    safe_limit = max(1, min(limit, 5000))
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT
+                    r.record_index,
+                    r.position_mm,
+                    r.latitude,
+                    r.longitude,
+                    r.gps_valid,
+                    r.al_x_mg, r.al_y_mg, r.al_z_mg,
+                    r.ar_x_mg, r.ar_y_mg, r.ar_z_mg,
+                    r.bg_x_mg, r.bg_y_mg, r.bg_z_mg,
+                    s.gateway_id,
+                    s.train_id,
+                    s.session_name,
+                    s.route_name
+                FROM rms_records r
+                JOIN sessions s ON s.session_id = r.session_id
+                ORDER BY r.rms_id DESC
+                LIMIT :limit
+            """),
+            {"limit": safe_limit},
+        ).fetchall()
+
+        threshold_row = conn.execute(
+            text("""
+                SELECT route_name, vertical_threshold, lateral_threshold
+                FROM thresholds
+                ORDER BY id DESC
+                LIMIT 1
+            """)
+        ).fetchone()
+
+    threshold = {
+        "routeName": threshold_row.route_name if threshold_row else "DEFAULT",
+        "verticalG": float(threshold_row.vertical_threshold) if threshold_row else 50.0,
+        "lateralG": float(threshold_row.lateral_threshold) if threshold_row else 80.0,
+        "alertSpeedKmph": ALERT_SPEED_LIMIT_KMPH,
+    }
+
+    records = []
+    for row in reversed(rows):
+        x_g = max(abs(row.al_x_mg or 0), abs(row.ar_x_mg or 0), abs(row.bg_x_mg or 0)) / 1000
+        y_g = max(abs(row.al_y_mg or 0), abs(row.ar_y_mg or 0), abs(row.bg_y_mg or 0)) / 1000
+        z_g = max(abs(row.al_z_mg or 0), abs(row.ar_z_mg or 0), abs(row.bg_z_mg or 0)) / 1000
+        distance_km = (row.position_mm or row.record_index * 250) / 1_000_000
+        records.append(
+            {
+                "recordIndex": row.record_index,
+                "distanceKm": round(distance_km, 6),
+                "positionMm": row.position_mm,
+                "latitude": row.latitude,
+                "longitude": row.longitude,
+                "gpsValid": row.gps_valid,
+                "gatewayId": row.gateway_id,
+                "trainId": row.train_id,
+                "sessionName": row.session_name,
+                "routeName": row.route_name,
+                "xG": round(x_g, 6),
+                "yG": round(y_g, 6),
+                "zG": round(z_g, 6),
+                "xAlert": x_g > threshold["lateralG"],
+                "yAlert": y_g > threshold["lateralG"],
+                "zAlert": z_g > threshold["verticalG"],
+            }
+        )
+
+    return {"threshold": threshold, "records": records}
+
+
 @app.post("/api/v1/alerts")
 def receive_cloud_alert_event(alert: CloudAlertEvent):
     init_db()
@@ -2760,6 +2845,11 @@ def receive_cloud_alert_event(alert: CloudAlertEvent):
         "train_id": alert.trainId,
         "session_name": alert.sessionName,
     }
+
+
+@app.post("/api/v1/alert")
+def receive_single_cloud_alert_event(alert: CloudAlertEvent):
+    return receive_cloud_alert_event(alert)
 
 
 # =====================================

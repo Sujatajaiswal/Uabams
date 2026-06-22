@@ -438,3 +438,250 @@ canvas {
     color: #55636f;
     padding: 16px;
 }
+
+.monitor-body {
+    background: #080d17;
+    color: #d8e7ff;
+    font-family: Arial, Helvetica, sans-serif;
+}
+
+.monitor-shell {
+    width: 100%;
+    min-height: 100vh;
+    padding: 0;
+}
+
+.monitor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    min-height: 36px;
+    border-bottom: 1px solid #243149;
+    background: #111827;
+    padding: 0 18px;
+}
+
+.monitor-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #e7f0ff;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+}
+
+.status-dot,
+.gateway-leds i {
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    background: #b7d7ff;
+    box-shadow: 0 0 8px rgba(183, 215, 255, .8);
+}
+
+.monitor-header .nav-link,
+.monitor-header button {
+    min-height: 30px;
+    border: 1px solid #263956;
+    background: #172640;
+    color: #d8e7ff;
+    padding: 0 12px;
+}
+
+.monitor-alert {
+    border-left: 5px solid #1d4ed8;
+    background: #0c1424;
+    color: #94b7e8;
+    font-weight: 700;
+    margin: 10px 16px;
+    padding: 10px 14px;
+}
+
+.monitor-alert.is-active {
+    border-left-color: #ef4444;
+    background: #2a1115;
+    color: #fecaca;
+}
+
+.monitor-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 294px;
+    gap: 16px;
+    padding: 14px 16px 10px;
+}
+
+.rms-stack {
+    display: grid;
+    gap: 18px;
+}
+
+.rms-panel {
+    min-height: 278px;
+    border-bottom: 1px solid #243149;
+    background: linear-gradient(180deg, #0b111d 0%, #090f19 100%);
+    padding: 10px 14px 4px;
+}
+
+.rms-panel h2 {
+    margin: 0 0 4px;
+    text-align: center;
+    font-size: 14px;
+}
+
+.rms-panel.x-axis h2 {
+    color: #ff6262;
+}
+
+.rms-panel.y-axis h2 {
+    color: #5ef082;
+}
+
+.rms-panel.z-axis h2 {
+    color: #45aaff;
+}
+
+.rms-panel canvas {
+    width: 100%;
+    height: 236px;
+}
+
+.gateway-panel {
+    display: grid;
+    align-content: start;
+    gap: 14px;
+    border-left: 1px solid #1d2c45;
+    background: #090f19;
+    padding-left: 18px;
+}
+
+.gateway-panel h2 {
+    margin: 4px 0 0;
+    color: #e7f0ff;
+    font-size: 14px;
+    text-transform: uppercase;
+}
+
+.gateway-leds {
+    display: flex;
+    gap: 12px;
+    color: #5f83b1;
+    font-size: 12px;
+}
+
+.gateway-leds span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.gateway-leds i {
+    width: 10px;
+    height: 10px;
+    background: #fb4f75;
+}
+
+.gateway-card {
+    border: 1px solid #20314d;
+    border-radius: 4px;
+    background: #0d1423;
+    padding: 10px;
+}
+
+.gateway-card h3 {
+    margin: 0 0 8px;
+    color: #6387b8;
+    font-size: 12px;
+}
+
+.gateway-card p {
+    display: flex;
+    justify-content: space-between;
+    margin: 7px 0;
+    color: #6387b8;
+    font-size: 11px;
+}
+
+.gateway-card strong {
+    color: #e7f0ff;
+}
+
+.gateway-card label {
+    color: #6387b8;
+    font-size: 11px;
+    margin-bottom: 6px;
+}
+
+.gateway-card input,
+.gateway-card select {
+    min-height: 28px;
+    border-color: #263956;
+    border-radius: 2px;
+    background: #111b2d;
+    color: #e7f0ff;
+    font-size: 12px;
+}
+
+.gateway-card button {
+    width: 100%;
+    min-height: 32px;
+    margin-top: 8px;
+}
+
+.blue-action {
+    background: #4aa9f0;
+}
+
+.red-action {
+    background: #ff6464;
+}
+
+.green-action {
+    background: #5bd772;
+}
+
+.dark-log {
+    min-height: 52px;
+    border: 1px solid #1f304c;
+    background: #111827;
+    color: #94b7e8;
+    font-size: 11px;
+    line-height: 1.35;
+    overflow: auto;
+    padding: 8px;
+    white-space: pre-wrap;
+}
+
+.monitor-table-card {
+    margin: 14px 16px 24px;
+    border: 1px solid #20314d;
+    border-radius: 6px;
+    background: #0d1423;
+    padding: 16px;
+}
+
+.monitor-table-card table {
+    color: #d8e7ff;
+}
+
+.monitor-table-card th,
+.monitor-table-card td {
+    border-bottom-color: #20314d;
+}
+
+.monitor-table-card th {
+    color: #94b7e8;
+}
+
+@media (max-width: 980px) {
+    .monitor-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .gateway-panel {
+        border-left: 0;
+        padding-left: 0;
+    }
+}
