@@ -228,6 +228,8 @@
                         <th>Index</th>
                         <th>Master Count</th>
                         <th>Position mm</th>
+                        <th>Latitude</th>
+                        <th>Longitude</th>
                         <th>GPS Valid</th>
                         <th>Valid Mask</th>
                         <th>AL X/Y/Z g</th>
@@ -260,6 +262,7 @@
                         <th>Speed</th>
                         <th>Valid Mask</th>
                         <th>Alert Generated</th>
+                        <th>Peak GPS</th>
                     </tr>
                 </thead>
                 <tbody id="peak-body"></tbody>
@@ -343,6 +346,7 @@
                         <th>Window</th>
                         <th>Speed</th>
                         <th>Axes</th>
+                        <th>GPS Location</th>
                         <th>Received At</th>
                     </tr>
                 </thead>
@@ -370,6 +374,57 @@ function formatRmsG(xMg, yMg, zMg) {
         Number(yMg || 0) / 1000,
         Number(zMg || 0) / 1000
     ].map(value => formatNumber(value, 3)).join(" / ");
+}
+
+function parseJson(value) {
+    if (!value) {
+        return null;
+    }
+    if (typeof value === "object") {
+        return value;
+    }
+    try {
+        return JSON.parse(value);
+    } catch (_error) {
+        return null;
+    }
+}
+
+function formatLocation(latitude, longitude) {
+    if (latitude === null || latitude === undefined || longitude === null || longitude === undefined) {
+        return "-";
+    }
+    return `${formatNumber(latitude, 6)}, ${formatNumber(longitude, 6)}`;
+}
+
+function peakGpsSummary(axisDataJson) {
+    const axisData = parseJson(axisDataJson);
+    if (!axisData) {
+        return "-";
+    }
+    const axes = Object.entries(axisData)
+        .map(([axisName, axis]) => ({
+            axisName,
+            peakValueG: Number(axis.peak_value_g || 0),
+            peakLat: axis.peak_lat,
+            peakLon: axis.peak_lon
+        }))
+        .filter(axis => axis.peakLat !== null && axis.peakLat !== undefined && axis.peakLon !== null && axis.peakLon !== undefined);
+    if (!axes.length) {
+        return "-";
+    }
+    axes.sort((left, right) => Math.abs(right.peakValueG) - Math.abs(left.peakValueG));
+    const peak = axes[0];
+    return `${peak.axisName.toUpperCase()} ${formatLocation(peak.peakLat, peak.peakLon)}`;
+}
+
+function alertLocation(row) {
+    if (row.latitude !== null && row.latitude !== undefined && row.longitude !== null && row.longitude !== undefined) {
+        return formatLocation(row.latitude, row.longitude);
+    }
+    const axes = row.triggered_axes || [];
+    const firstAxis = axes[0] || {};
+    return formatLocation(firstAxis.peakLat, firstAxis.peakLon);
 }
 
 const archiveFile = document.getElementById("archive-file");
@@ -467,6 +522,8 @@ function loadRmsRecords() {
         row => row.record_index,
         row => row.master_count,
         row => row.position_mm,
+        row => formatNumber(row.latitude, 6),
+        row => formatNumber(row.longitude, 6),
         row => row.gps_valid,
         row => row.valid_mask,
         row => formatRmsG(row.al_x_mg, row.al_y_mg, row.al_z_mg),
@@ -484,7 +541,8 @@ function loadPeakRecords() {
         row => row.window_end_mm,
         row => formatNumber(row.speed_kmph, 2),
         row => row.valid_mask,
-        row => row.alert_generated
+        row => row.alert_generated,
+        row => peakGpsSummary(row.axis_data_json)
     ], "No peak records parsed yet.");
 }
 
@@ -518,16 +576,36 @@ function loadRawPackets() {
 }
 
 function loadAlertEvents() {
-    loadTable("cloud-alert-events", "event-body", [
-        row => row.alert_event_id,
-        row => row.gateway_id,
-        row => row.train_id,
-        row => row.session_name,
-        row => `${row.window_start_mm} - ${row.window_end_mm}`,
-        row => formatNumber(row.speed_kmph, 2),
-        row => row.triggered_axes_count,
-        row => valueOrDash(row.received_utc)
-    ], "No realtime alert events received yet.");
+    const body = document.getElementById("event-body");
+    fetch("/api/v1/alerts?limit=10")
+        .then(response => {
+            if (!response.ok) {
+                throw new Error("alerts unavailable");
+            }
+            return response.json();
+        })
+        .then(rows => {
+            if (!rows.length) {
+                body.innerHTML = `<tr><td colspan="9">No realtime alert events received yet.</td></tr>`;
+                return;
+            }
+            body.innerHTML = rows.map(row => `
+                <tr>
+                    <td>${row.alert_event_id}</td>
+                    <td>${row.gateway_id}</td>
+                    <td>${row.train_id}</td>
+                    <td>${row.session_name}</td>
+                    <td>${row.window_start_mm} - ${row.window_end_mm}</td>
+                    <td>${formatNumber(row.speed_kmph, 2)}</td>
+                    <td>${row.triggered_axes_count}</td>
+                    <td>${alertLocation(row)}</td>
+                    <td>${valueOrDash(row.received_utc)}</td>
+                </tr>
+            `).join("");
+        })
+        .catch(() => {
+            body.innerHTML = `<tr><td colspan="9">Data unavailable. Check DATABASE_URL.</td></tr>`;
+        });
 }
 
 loadArchives();

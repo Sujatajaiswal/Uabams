@@ -74,10 +74,15 @@ function recordTitle(collectionName, record) {
 function recordMessage(collectionName, record) {
     if (record.message) return record.message;
     if (collectionName === "gateway_archives") {
-        return `Gateway ${record.gatewayId || "-"}, route ${record.routeName || "-"}, speed ${record.speedKmph || "-"} kmph, peak ${record.peakG || "-"}g`;
+        const gps = record.gps || {};
+        return `Gateway ${record.gatewayId || "-"}, route ${record.routeName || "-"}, speed ${record.speedKmph || "-"} kmph, peak ${record.peakG || "-"}g, GPS ${gps.lat || record.latitude || "-"}, ${gps.lon || record.longitude || "-"}`;
     }
     if (collectionName === "raw_gateway_payloads") return "Original gateway JSON payload stored for traceability.";
     if (collectionName === "operation_decisions") return `${record.operationReason || "Speed rule evaluated."} Speed ${record.speedKmph || "-"} kmph, peak ${record.peakG || "-"}g`;
+    if (collectionName === "alert_notifications") {
+        const gps = record.gps || {};
+        return `Alert GPS ${gps.lat || record.latitude || "-"}, ${gps.lon || record.longitude || "-"}, threshold ${record.thresholdG || "-"}g`;
+    }
     if (collectionName === "sms_logs") return `Recipient ${record.recipient || "NOT_CONFIGURED"}, provider ${record.provider || "not_configured"}`;
     if (collectionName === "archive_uploads") return `Validation ${record.validationStatus || "-"}, size ${record.archiveSizeBytes || "-"} bytes`;
     return valueText(record);
