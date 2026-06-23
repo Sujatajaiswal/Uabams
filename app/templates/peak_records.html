@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>UABAMS Peak Records</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="shell">
+    <header class="page-header">
+        <div>
+            <p class="eyebrow">Processed Data</p>
+            <h1>Peak 50m Records</h1>
+        </div>
+        <a class="nav-link" href="/dashboard">Dashboard</a>
+    </header>
+
+    <section class="card">
+        <h2>PeakRecord50m Filters</h2>
+        <div class="peak-filter-grid">
+            <label>Session <input id="filter-session" placeholder="SESSION_..."></label>
+            <label>Gateway <input id="filter-gateway" placeholder="GW_..."></label>
+            <label>Train <input id="filter-train" placeholder="TRAIN_..."></label>
+            <label>Start mm <input id="filter-start" type="number" min="0"></label>
+            <label>End mm <input id="filter-end" type="number" min="0"></label>
+            <label>Speed >= <input id="filter-speed" type="number" min="0" step="0.1"></label>
+            <label>Node
+                <select id="filter-node">
+                    <option value="">All</option>
+                    <option value="al">AL</option>
+                    <option value="ar">AR</option>
+                    <option value="bg">BG</option>
+                </select>
+            </label>
+            <label class="check-label"><input id="filter-alert" type="checkbox"> Alert only</label>
+            <button type="button" onclick="loadPeakRecords()">Apply Filters</button>
+        </div>
+    </section>
+
+    <section class="peak-grid">
+        <article class="card">
+            <h2>Alert Map Overlay</h2>
+            <p class="muted">Red segments are windows where alertGenerated is true. Click a segment to see the triggering axis and peak value.</p>
+            <svg id="peak-map" viewBox="0 0 800 360" role="img" aria-label="Peak alert map"></svg>
+            <p id="map-detail" class="status-line">No segment selected.</p>
+        </article>
+        <article class="card">
+            <h2>Trend View</h2>
+            <p class="muted">Per-axis peak values across successive sessions at the selected/visible track positions.</p>
+            <canvas id="trend-chart" height="260"></canvas>
+        </article>
+    </section>
+
+    <section class="card">
+        <h2>PeakRecord50m Table</h2>
+        <div class="table-wrap">
+            <table id="peak-table">
+                <thead>
+                    <tr>
+                        <th data-sort="sessionName">Session</th>
+                        <th data-sort="windowStartMm">Window Start</th>
+                        <th data-sort="windowEndMm">Window End</th>
+                        <th data-sort="speedKmph">Max Speed</th>
+                        <th data-sort="alertGenerated">Alert?</th>
+                        <th data-sort="axesWithData">Axes with data</th>
+                    </tr>
+                </thead>
+                <tbody id="peak-body"></tbody>
+            </table>
+        </div>
+    </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+let peakRecords = [];
+let sortState = { key: "windowStartMm", direction: "asc" };
+let trendChart = null;
+
+function valueOrDash(value, digits = null) {
+    if (value === null || value === undefined || value === "") return "-";
+    if (digits !== null && !Number.isNaN(Number(value))) return Number(value).toFixed(digits);
+    return value;
+}
+
+function buildQuery() {
+    const params = new URLSearchParams({ limit: "1000" });
+    const fields = [
+        ["session", "filter-session"],
+        ["gateway", "filter-gateway"],
+        ["train", "filter-train"],
+        ["position_start_mm", "filter-start"],
+        ["position_end_mm", "filter-end"],
+        ["speed_min", "filter-speed"],
+        ["node", "filter-node"]
+    ];
+    for (const [name, id] of fields) {
+        const value = document.getElementById(id).value.trim();
+        if (value) params.set(name, value);
+    }
+    if (document.getElementById("filter-alert").checked) params.set("alert_only", "true");
+    return params.toString();
+}
+
+async function loadPeakRecords() {
+    const response = await fetch(`/api/v1/peak-records?${buildQuery()}`);
+    const payload = await response.json();
+    peakRecords = payload.records || [];
+    renderTable();
+    renderMap();
+    renderTrend();
+}
+
+function sortRecords(records) {
+    const direction = sortState.direction === "asc" ? 1 : -1;
+    return [...records].sort((a, b) => {
+        let av = a[sortState.key];
+        let bv = b[sortState.key];
+        if (Array.isArray(av)) av = av.join(",");
+        if (Array.isArray(bv)) bv = bv.join(",");
+        if (av === bv) return 0;
+        if (av === null || av === undefined) return 1;
+        if (bv === null || bv === undefined) return -1;
+        return av > bv ? direction : -direction;
+    });
+}
+
+function renderTable() {
+    const body = document.getElementById("peak-body");
+    body.innerHTML = "";
+    for (const record of sortRecords(peakRecords)) {
+        const row = document.createElement("tr");
+        row.className = "expandable-row";
+        row.innerHTML = `
+            <td>${record.sessionName}</td>
+            <td>${valueOrDash(record.windowStartMm)} mm<br><span>${record.windowStartKm} km</span></td>
+            <td>${valueOrDash(record.windowEndMm)} mm<br><span>${record.windowEndKm} km</span></td>
+            <td>${valueOrDash(record.speedKmph, 2)} kmph</td>
+            <td>${record.alertGenerated ? "<strong class='danger-text'>Yes</strong>" : "No"}</td>
+            <td>${record.axesWithData.join(", ") || "-"}</td>
+        `;
+        row.addEventListener("click", () => toggleDetails(row, record));
+        body.appendChild(row);
+    }
+}
+
+function toggleDetails(row, record) {
+    const next = row.nextElementSibling;
+    if (next && next.classList.contains("detail-row")) {
+        next.remove();
+        return;
+    }
+    const detail = document.createElement("tr");
+    detail.className = "detail-row";
+    detail.innerHTML = `
+        <td colspan="6">
+            <table class="nested-table">
+                <thead>
+                    <tr>
+                        <th>Axis</th>
+                        <th>Peak g</th>
+                        <th>Threshold g</th>
+                        <th>Position</th>
+                        <th>Lat</th>
+                        <th>Lon</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${record.axes.map(axis => `
+                        <tr>
+                            <td>${axis.axisLabel}</td>
+                            <td>${valueOrDash(axis.peakG, 3)}</td>
+                            <td>${valueOrDash(axis.thresholdG, 1)}</td>
+                            <td>${valueOrDash(axis.positionMm)} mm</td>
+                            <td>${valueOrDash(axis.latitude, 6)}</td>
+                            <td>${valueOrDash(axis.longitude, 6)}</td>
+                        </tr>
+                    `).join("")}
+                </tbody>
+            </table>
+        </td>
+    `;
+    row.after(detail);
+}
+
+function renderMap() {
+    const svg = document.getElementById("peak-map");
+    const segments = peakRecords.flatMap(record => record.mapSegments || []);
+    svg.innerHTML = "";
+    const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    bg.setAttribute("x", "0");
+    bg.setAttribute("y", "0");
+    bg.setAttribute("width", "800");
+    bg.setAttribute("height", "360");
+    bg.setAttribute("rx", "8");
+    bg.setAttribute("fill", "#eef6ef");
+    svg.appendChild(bg);
+    if (!segments.length) {
+        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        text.setAttribute("x", "400");
+        text.setAttribute("y", "180");
+        text.setAttribute("text-anchor", "middle");
+        text.setAttribute("fill", "#456");
+        text.textContent = "No alert windows for current filters";
+        svg.appendChild(text);
+        return;
+    }
+    const lats = segments.flatMap(s => [s.startLat, s.endLat]);
+    const lons = segments.flatMap(s => [s.startLon, s.endLon]);
+    const minLat = Math.min(...lats);
+    const maxLat = Math.max(...lats);
+    const minLon = Math.min(...lons);
+    const maxLon = Math.max(...lons);
+    const project = (lat, lon) => {
+        const x = 40 + ((lon - minLon) / ((maxLon - minLon) || 1)) * 720;
+        const y = 320 - ((lat - minLat) / ((maxLat - minLat) || 1)) * 280;
+        return [x, y];
+    };
+    for (const segment of segments) {
+        const [x1, y1] = project(segment.startLat, segment.startLon);
+        const [x2, y2] = project(segment.endLat, segment.endLon);
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", x1);
+        line.setAttribute("y1", y1);
+        line.setAttribute("x2", x2);
+        line.setAttribute("y2", y2);
+        line.setAttribute("stroke", "#d11d1d");
+        line.setAttribute("stroke-width", "7");
+        line.setAttribute("stroke-linecap", "round");
+        line.style.cursor = "pointer";
+        line.addEventListener("click", () => {
+            document.getElementById("map-detail").textContent =
+                `${segment.axisLabel}: ${valueOrDash(segment.peakG, 3)}g > ${valueOrDash(segment.thresholdG, 1)}g, window ${segment.windowStartMm}-${segment.windowEndMm} mm`;
+        });
+        svg.appendChild(line);
+    }
+}
+
+function renderTrend() {
+    const points = [];
+    for (const record of peakRecords) {
+        for (const axis of record.axes || []) {
+            if (axis.valid && axis.peakG !== null && axis.peakG !== undefined) {
+                points.push({ ...axis, sessionName: record.sessionName, xLabel: `${record.sessionName} ${record.windowStartKm}km` });
+            }
+        }
+    }
+    const labels = [...new Set(points.map(point => point.xLabel))].slice(0, 40);
+    const axisNames = [...new Set(points.map(point => point.axisName))].slice(0, 9);
+    const colors = {
+        al_x: "#2477ff", al_y: "#2477ff", al_z: "#2477ff",
+        ar_x: "#d83333", ar_y: "#d83333", ar_z: "#d83333",
+        bg_x: "#2ca84f", bg_y: "#2ca84f", bg_z: "#2ca84f"
+    };
+    const datasets = axisNames.map(axisName => ({
+        label: axisName.replaceAll("_", " ").toUpperCase(),
+        data: labels.map(label => {
+            const point = points.find(item => item.axisName === axisName && item.xLabel === label);
+            return point ? point.peakG : null;
+        }),
+        borderColor: colors[axisName] || "#555",
+        backgroundColor: colors[axisName] || "#555",
+        tension: 0.2,
+        spanGaps: false
+    }));
+    if (trendChart) trendChart.destroy();
+    trendChart = new Chart(document.getElementById("trend-chart"), {
+        type: "line",
+        data: { labels, datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: { y: { title: { display: true, text: "Peak (g)" } } }
+        }
+    });
+}
+
+document.querySelectorAll("#peak-table th[data-sort]").forEach(th => {
+    th.addEventListener("click", () => {
+        const key = th.dataset.sort;
+        sortState = {
+            key,
+            direction: sortState.key === key && sortState.direction === "asc" ? "desc" : "asc"
+        };
+        renderTable();
+    });
+});
+
+loadPeakRecords();
+</script>
+</body>
+</html>

@@ -98,6 +98,12 @@ RMS_NODE_VALID_BITS = {
     "ar": 0x02,
     "bg": 0x04,
 }
+NODE_LABELS = {
+    "al": "ADXL Left",
+    "ar": "ADXL Right",
+    "bg": "Bogie",
+}
+CALIBRATION_Q16_DENOMINATOR = 65536
 MONGODB_URL = os.getenv("MONGODB_URL", "")
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "uabams_cloud")
 AUTH_API_KEY = os.getenv("AUTH_API_KEY", "uabams-demo-api-key")
@@ -261,6 +267,7 @@ CSV_REPORTS = {
                 node_id,
                 sequence_number,
                 eof,
+                cal_version,
                 truncated
             FROM raw_packet_records
             ORDER BY raw_packet_id DESC
@@ -885,6 +892,113 @@ def map_alert_event_row(row):
     }
 
 
+def axis_node(axis_name: str) -> str:
+    return str(axis_name or "").split("_", 1)[0].lower()
+
+
+def axis_display_name(axis_name: str) -> str:
+    return str(axis_name or "").replace("_", " ").upper()
+
+
+def q16_to_float(value: int) -> float:
+    return round(float(value) / CALIBRATION_Q16_DENOMINATOR, 6)
+
+
+def map_peak_record_row(row, node_filter: Optional[str] = None):
+    try:
+        axis_data = json.loads(row.axis_data_json or "{}")
+    except json.JSONDecodeError:
+        axis_data = {}
+
+    requested_node = (node_filter or "").strip().lower()
+    axes = []
+    alert_axes = []
+    for axis_name in sorted(axis_data.keys()):
+        node = axis_node(axis_name)
+        if requested_node and node != requested_node:
+            continue
+        axis = axis_data.get(axis_name) or {}
+        valid = rms_axis_valid(row.valid_mask, axis_name)
+        peak_g = axis.get("peak_value_g")
+        threshold_g = axis_threshold_g(axis_name)
+        axis_alert = (
+            bool(row.alert_generated)
+            and valid
+            and peak_g is not None
+            and threshold_g is not None
+            and float(row.speed_kmph or 0) >= ALERT_SPEED_LIMIT_KMPH
+            and float(peak_g) > float(threshold_g)
+        )
+        mapped_axis = {
+            "axisName": axis_name,
+            "axisLabel": axis_display_name(axis_name),
+            "node": node.upper(),
+            "nodeLabel": NODE_LABELS.get(node, node.upper()),
+            "valid": valid,
+            "peakG": round(float(peak_g), 6) if peak_g is not None else None,
+            "thresholdG": threshold_g,
+            "positionMm": axis.get("peak_position_mm"),
+            "latitude": axis.get("peak_lat"),
+            "longitude": axis.get("peak_lon"),
+            "masterCount": axis.get("peak_master_count"),
+            "alert": axis_alert,
+        }
+        axes.append(mapped_axis)
+        if axis_alert:
+            alert_axes.append(mapped_axis)
+
+    if requested_node and not axes:
+        return None
+
+    axes_with_data = [
+        axis["axisLabel"]
+        for axis in axes
+        if axis["valid"] and axis["peakG"] is not None
+    ]
+    map_segments = []
+    for axis in alert_axes:
+        lat = axis.get("latitude")
+        lon = axis.get("longitude")
+        if lat is None or lon is None:
+            continue
+        map_segments.append(
+            {
+                "axisName": axis["axisName"],
+                "axisLabel": axis["axisLabel"],
+                "peakG": axis["peakG"],
+                "thresholdG": axis["thresholdG"],
+                "windowStartMm": row.window_start_mm,
+                "windowEndMm": row.window_end_mm,
+                "latitude": lat,
+                "longitude": lon,
+                "startLat": float(lat) - 0.00008,
+                "startLon": float(lon) - 0.00008,
+                "endLat": float(lat) + 0.00008,
+                "endLon": float(lon) + 0.00008,
+            }
+        )
+
+    return {
+        "peakId": row.peak_id,
+        "sessionId": row.session_id,
+        "gatewayId": row.gateway_id,
+        "trainId": row.train_id,
+        "sessionName": row.session_name,
+        "routeName": row.route_name,
+        "recordIndex": row.record_index,
+        "windowStartMm": row.window_start_mm,
+        "windowEndMm": row.window_end_mm,
+        "windowStartKm": round((row.window_start_mm or 0) / 1_000_000, 6),
+        "windowEndKm": round((row.window_end_mm or 0) / 1_000_000, 6),
+        "speedKmph": float(row.speed_kmph) if row.speed_kmph is not None else None,
+        "validMask": row.valid_mask,
+        "alertGenerated": bool(row.alert_generated),
+        "axesWithData": axes_with_data,
+        "axes": axes,
+        "mapSegments": map_segments,
+    }
+
+
 def parse_fault_records(file_path: Path):
     records = []
     for record_index, raw in iter_fixed_records(file_path, 75) or []:
@@ -925,15 +1039,20 @@ def parse_raw_packet_records(file_path: Path):
             truncated = True
             break
         frame = data[frame_start:frame_end]
+        packet_type = frame[1] if len(frame) > 1 else None
+        cal_version = None
+        if packet_type == 0x02 and len(frame) >= 19:
+            cal_version = struct.unpack_from("<I", frame, 15)[0]
         records.append(
             {
                 "record_index": record_index,
                 "packet_length": packet_length,
                 "sof": frame[0] if len(frame) > 0 else None,
-                "packet_type": frame[1] if len(frame) > 1 else None,
+                "packet_type": packet_type,
                 "node_id": frame[2] if len(frame) > 2 else None,
                 "sequence_number": frame[3] if len(frame) > 3 else None,
                 "eof": frame[-1] if frame else None,
+                "cal_version": cal_version,
                 "truncated": False,
             }
         )
@@ -950,6 +1069,7 @@ def parse_raw_packet_records(file_path: Path):
                 "node_id": None,
                 "sequence_number": None,
                 "eof": None,
+                "cal_version": None,
                 "truncated": True,
             }
         )
@@ -1589,10 +1709,14 @@ def init_db():
                     node_id SMALLINT,
                     sequence_number SMALLINT,
                     eof SMALLINT,
+                    cal_version INTEGER,
                     truncated BOOLEAN,
                     UNIQUE(session_id, file_relative_path, record_index)
                 )
             """)
+        )
+        conn.execute(
+            text("ALTER TABLE raw_packet_records ADD COLUMN IF NOT EXISTS cal_version INTEGER")
         )
 
         conn.execute(
@@ -2190,13 +2314,13 @@ async def upload_session_archive(
                             (
                                 session_id, file_relative_path, record_index,
                                 packet_length, sof, packet_type, node_id,
-                                sequence_number, eof, truncated
+                                sequence_number, eof, cal_version, truncated
                             )
                             VALUES
                             (
                                 :session_id, :file_relative_path, :record_index,
                                 :packet_length, :sof, :packet_type, :node_id,
-                                :sequence_number, :eof, :truncated
+                                :sequence_number, :eof, :cal_version, :truncated
                             )
                             ON CONFLICT (session_id, file_relative_path, record_index) DO NOTHING
                         """),
@@ -2909,6 +3033,165 @@ def get_rms_series(limit: int = 1200):
     return {"threshold": threshold, "records": records}
 
 
+@app.get("/api/v1/peak-records")
+def get_peak_records(
+    session: Optional[str] = None,
+    gateway: Optional[str] = None,
+    train: Optional[str] = None,
+    alert_only: bool = False,
+    position_start_mm: Optional[int] = None,
+    position_end_mm: Optional[int] = None,
+    speed_min: Optional[float] = None,
+    node: Optional[str] = None,
+    limit: int = 500,
+):
+    init_db()
+    safe_limit = max(1, min(limit, 5000))
+    params = {
+        "session": f"%{session}%" if session else None,
+        "gateway": f"%{gateway}%" if gateway else None,
+        "train": f"%{train}%" if train else None,
+        "alert_only": alert_only,
+        "position_start_mm": position_start_mm,
+        "position_end_mm": position_end_mm,
+        "speed_min": speed_min,
+        "limit": safe_limit,
+    }
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT
+                    p.peak_id,
+                    p.session_id,
+                    p.record_index,
+                    p.window_start_mm,
+                    p.window_end_mm,
+                    p.speed_kmph,
+                    p.valid_mask,
+                    p.alert_generated,
+                    p.axis_data_json,
+                    s.gateway_id,
+                    s.train_id,
+                    s.session_name,
+                    s.route_name
+                FROM peak_records p
+                JOIN sessions s ON s.session_id = p.session_id
+                WHERE (:session IS NULL OR s.session_name ILIKE :session)
+                  AND (:gateway IS NULL OR s.gateway_id ILIKE :gateway)
+                  AND (:train IS NULL OR s.train_id ILIKE :train)
+                  AND (:alert_only = FALSE OR p.alert_generated = TRUE)
+                  AND (:position_start_mm IS NULL OR p.window_end_mm >= :position_start_mm)
+                  AND (:position_end_mm IS NULL OR p.window_start_mm <= :position_end_mm)
+                  AND (:speed_min IS NULL OR p.speed_kmph >= :speed_min)
+                ORDER BY p.peak_id DESC
+                LIMIT :limit
+            """),
+            params,
+        ).fetchall()
+
+    records = []
+    for row in rows:
+        mapped = map_peak_record_row(row, node)
+        if mapped:
+            records.append(mapped)
+
+    return {
+        "records": records,
+        "thresholdsG": PEAK_AXIS_THRESHOLDS_G,
+        "filters": {
+            "session": session,
+            "gateway": gateway,
+            "train": train,
+            "alertOnly": alert_only,
+            "positionStartMm": position_start_mm,
+            "positionEndMm": position_end_mm,
+            "speedMin": speed_min,
+            "node": node,
+        },
+    }
+
+
+@app.get("/api/v1/peak-trends")
+def get_peak_trends(
+    position_mm: Optional[int] = None,
+    tolerance_mm: int = 50000,
+    node: Optional[str] = None,
+    axis: Optional[str] = None,
+    limit: int = 1000,
+):
+    init_db()
+    safe_limit = max(1, min(limit, 5000))
+    requested_axis = axis.lower() if axis else None
+    requested_node = node.lower() if node else None
+    params = {
+        "position_mm": position_mm,
+        "min_position": (position_mm - tolerance_mm) if position_mm is not None else None,
+        "max_position": (position_mm + tolerance_mm) if position_mm is not None else None,
+        "limit": safe_limit,
+    }
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT
+                    p.peak_id,
+                    p.session_id,
+                    p.record_index,
+                    p.window_start_mm,
+                    p.window_end_mm,
+                    p.speed_kmph,
+                    p.valid_mask,
+                    p.alert_generated,
+                    p.axis_data_json,
+                    s.gateway_id,
+                    s.train_id,
+                    s.session_name,
+                    s.route_name,
+                    s.created_utc
+                FROM peak_records p
+                JOIN sessions s ON s.session_id = p.session_id
+                WHERE (:position_mm IS NULL OR (
+                    p.window_start_mm <= :max_position
+                    AND p.window_end_mm >= :min_position
+                ))
+                ORDER BY s.created_utc ASC, p.window_start_mm ASC, p.peak_id ASC
+                LIMIT :limit
+            """),
+            params,
+        ).fetchall()
+
+    points = []
+    for row in rows:
+        mapped = map_peak_record_row(row)
+        if not mapped:
+            continue
+        for axis_row in mapped["axes"]:
+            if requested_node and axis_row["node"].lower() != requested_node:
+                continue
+            if requested_axis and axis_row["axisName"] != requested_axis:
+                continue
+            if axis_row["peakG"] is None or not axis_row["valid"]:
+                continue
+            points.append(
+                {
+                    "sessionName": mapped["sessionName"],
+                    "gatewayId": mapped["gatewayId"],
+                    "trainId": mapped["trainId"],
+                    "axisName": axis_row["axisName"],
+                    "axisLabel": axis_row["axisLabel"],
+                    "windowStartMm": mapped["windowStartMm"],
+                    "windowEndMm": mapped["windowEndMm"],
+                    "peakG": axis_row["peakG"],
+                    "alertGenerated": mapped["alertGenerated"],
+                }
+            )
+
+    return {
+        "positionMm": position_mm,
+        "toleranceMm": tolerance_mm,
+        "points": points,
+    }
+
+
 @app.post("/api/v1/alerts")
 def receive_cloud_alert_event(alert: CloudAlertEvent):
     init_db()
@@ -3035,17 +3318,100 @@ async def receive_single_cloud_alert_event(request: Request):
 
 @app.get("/api/v1/calibration/{gateway_id}")
 def get_gateway_calibration(gateway_id: str):
+    adxl_defaults = {
+        "enabled": True,
+        "version": 1,
+        "scale_q16_x": 655360,
+        "scale_q16_y": 655360,
+        "scale_q16_z": 655360,
+        "offset_q16_x": 0,
+        "offset_q16_y": 0,
+        "offset_q16_z": 0,
+    }
+    bogie_defaults = {
+        "enabled": True,
+        "version": 1,
+        "iis_scale_q16_x": 1599,
+        "iis_scale_q16_y": 1599,
+        "iis_scale_q16_z": 1599,
+        "iis_offset_q16_x": 0,
+        "iis_offset_q16_y": 0,
+        "iis_offset_q16_z": 0,
+        "imu_accel_scale_q16_x": 1599,
+        "imu_accel_scale_q16_y": 1599,
+        "imu_accel_scale_q16_z": 1599,
+        "imu_accel_offset_q16_x": 0,
+        "imu_accel_offset_q16_y": 0,
+        "imu_accel_offset_q16_z": 0,
+        "imu_gyro_scale_q16_x": 11469,
+        "imu_gyro_scale_q16_y": 11469,
+        "imu_gyro_scale_q16_z": 11469,
+        "imu_gyro_offset_q16_x": 0,
+        "imu_gyro_offset_q16_y": 0,
+        "imu_gyro_offset_q16_z": 0,
+    }
     return {
         "gatewayId": gateway_id,
-        "targetNode": "ADXL Node (0x01)",
-        "version": 1,
-        "scaleXQ16": 65536,
-        "scaleYQ16": 65536,
-        "scaleZQ16": 65536,
-        "offsetX": 0,
-        "offsetY": 0,
-        "offsetZ": 0,
-        "message": "Calibration payload ready for gateway pull",
+        "status": "planned_pull_endpoint",
+        "currentGatewayStatus": (
+            "Gateway polling is planned. Current available workflow is out-of-band "
+            "gateway_config.ini generation and delivery by SSH/SCP."
+        ),
+        "versionVerification": {
+            "source": "raw encoder health packets",
+            "packetType": "0x02",
+            "packetSizeBytes": 22,
+            "calVersionOffset": 15,
+            "calVersionType": "uint32 little-endian",
+            "databaseField": "raw_packet_records.cal_version",
+        },
+        "adxl_left": {
+            "section": "calibration_adxl_left",
+            "nodeId": "0x01",
+            **adxl_defaults,
+            "scale_float_x": q16_to_float(adxl_defaults["scale_q16_x"]),
+            "scale_float_y": q16_to_float(adxl_defaults["scale_q16_y"]),
+            "scale_float_z": q16_to_float(adxl_defaults["scale_q16_z"]),
+        },
+        "adxl_right": {
+            "section": "calibration_adxl_right",
+            "nodeId": "0x02",
+            **adxl_defaults,
+            "scale_float_x": q16_to_float(adxl_defaults["scale_q16_x"]),
+            "scale_float_y": q16_to_float(adxl_defaults["scale_q16_y"]),
+            "scale_float_z": q16_to_float(adxl_defaults["scale_q16_z"]),
+        },
+        "bogie": {
+            "section": "calibration_bogie",
+            "nodeId": "0x03",
+            **bogie_defaults,
+            "iis_scale_float_x": q16_to_float(bogie_defaults["iis_scale_q16_x"]),
+            "iis_scale_float_y": q16_to_float(bogie_defaults["iis_scale_q16_y"]),
+            "iis_scale_float_z": q16_to_float(bogie_defaults["iis_scale_q16_z"]),
+            "imu_accel_scale_float_x": q16_to_float(bogie_defaults["imu_accel_scale_q16_x"]),
+            "imu_accel_scale_float_y": q16_to_float(bogie_defaults["imu_accel_scale_q16_y"]),
+            "imu_accel_scale_float_z": q16_to_float(bogie_defaults["imu_accel_scale_q16_z"]),
+            "imu_gyro_scale_float_x": q16_to_float(bogie_defaults["imu_gyro_scale_q16_x"]),
+            "imu_gyro_scale_float_y": q16_to_float(bogie_defaults["imu_gyro_scale_q16_y"]),
+            "imu_gyro_scale_float_z": q16_to_float(bogie_defaults["imu_gyro_scale_q16_z"]),
+        },
+        "encoder": {
+            "section": "calibration_encoder",
+            "nodeId": "0x04",
+            "enabled": True,
+            "version": 1,
+            "wheel_diameter_m": 0.915,
+            "encoder_ppr": 100,
+            "spatial_interval_mm": 250,
+            "direction_invert": False,
+            "input_filter_strength": 8,
+            "trigger_start_speed_kmph": 20.0,
+            "formatNote": "Encoder parameters are stored directly, not Q16.16.",
+        },
+        "deliveryOptions": {
+            "availableNow": "Generate gateway_config.ini and deliver by SSH/SCP, then restart gateway.",
+            "planned": "Gateway polls GET /api/v1/calibration/{gatewayId} and applies newer versions.",
+        },
     }
 
 
@@ -3954,6 +4320,14 @@ def alerts_page(request: Request):
     return templates.TemplateResponse(
         request,
         "alerts.html",
+    )
+
+
+@app.get("/peak-records-page")
+def peak_records_page(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "peak_records.html",
     )
 
 

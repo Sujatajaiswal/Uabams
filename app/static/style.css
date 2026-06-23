@@ -698,3 +698,96 @@ canvas {
         padding-left: 0;
     }
 }
+
+.peak-filter-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(160px, 1fr));
+    gap: 14px;
+    align-items: end;
+}
+
+.peak-filter-grid label {
+    display: grid;
+    gap: 6px;
+    font-weight: 700;
+    color: #24384e;
+}
+
+.peak-filter-grid .check-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 46px;
+}
+
+.peak-filter-grid button {
+    min-height: 52px;
+}
+
+.peak-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(360px, .8fr);
+    gap: 24px;
+}
+
+#peak-map {
+    display: block;
+    width: 100%;
+    min-height: 320px;
+    border: 1px solid #d1dce8;
+    border-radius: 8px;
+    background: #eef6ef;
+}
+
+#trend-chart {
+    width: 100%;
+    min-height: 320px;
+}
+
+.muted {
+    color: #52667d;
+    margin-top: 0;
+}
+
+.status-line {
+    color: #075d68;
+    font-weight: 700;
+}
+
+#peak-table th {
+    cursor: pointer;
+}
+
+#peak-table td span {
+    color: #52667d;
+    font-size: 13px;
+}
+
+.expandable-row:hover {
+    background: #f4f8fb;
+}
+
+.detail-row td {
+    background: #f9fbfd;
+}
+
+.nested-table {
+    margin: 0;
+    width: 100%;
+}
+
+.nested-table th,
+.nested-table td {
+    font-size: 14px;
+}
+
+.danger-text {
+    color: #b42318;
+}
+
+@media (max-width: 1100px) {
+    .peak-filter-grid,
+    .peak-grid {
+        grid-template-columns: 1fr;
+    }
+}
