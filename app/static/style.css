@@ -446,6 +446,9 @@ canvas {
     height: 100vh;
     margin: 0;
     overflow: hidden;
+    position: fixed;
+    inset: 0;
+    width: 100%;
 }
 
 .monitor-shell {
@@ -517,7 +520,7 @@ canvas {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 268px;
     gap: 10px;
-    height: calc(100vh - 72px);
+    height: calc(100vh - 70px);
     padding: 6px 12px 8px;
     overflow: hidden;
 }
@@ -525,7 +528,7 @@ canvas {
 .rms-stack {
     display: grid;
     grid-template-rows: repeat(3, minmax(0, 1fr));
-    gap: 7px;
+    gap: 5px;
     min-height: 0;
 }
 
@@ -533,7 +536,7 @@ canvas {
     min-height: 0;
     border-bottom: 1px solid #243149;
     background: linear-gradient(180deg, #0b111d 0%, #090f19 100%);
-    padding: 4px 10px 2px;
+    padding: 3px 10px 1px;
     overflow: hidden;
 }
 
@@ -564,7 +567,7 @@ canvas {
 .gateway-panel {
     display: grid;
     align-content: start;
-    gap: 6px;
+    gap: 5px;
     border-left: 1px solid #1d2c45;
     background: #090f19;
     max-height: 100%;
@@ -602,7 +605,7 @@ canvas {
     border: 1px solid #20314d;
     border-radius: 4px;
     background: #0d1423;
-    padding: 6px 8px;
+    padding: 5px 8px;
 }
 
 .gateway-card h3 {

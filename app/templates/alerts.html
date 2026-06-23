@@ -93,6 +93,27 @@ const speedGateKmph = 80;
 const notificationButton = document.getElementById("notification-button");
 const notificationBanner = document.getElementById("alert-notification");
 const charts = {};
+const axisThresholdsG = {
+    al_x: 100, al_y: 80, al_z: 120,
+    ar_x: 100, ar_y: 80, ar_z: 120,
+    bg_x: 50, bg_y: 40, bg_z: 60
+};
+const componentAxes = {
+    x: ["al_x", "ar_x", "bg_x"],
+    y: ["al_y", "ar_y", "bg_y"],
+    z: ["al_z", "ar_z", "bg_z"]
+};
+const axisStyles = {
+    al_x: { label: "AL X", color: "#3aa7ff", dash: [] },
+    al_y: { label: "AL Y", color: "#3aa7ff", dash: [7, 5] },
+    al_z: { label: "AL Z", color: "#3aa7ff", dash: [2, 4] },
+    ar_x: { label: "AR X", color: "#ff5b5b", dash: [] },
+    ar_y: { label: "AR Y", color: "#ff5b5b", dash: [7, 5] },
+    ar_z: { label: "AR Z", color: "#ff5b5b", dash: [2, 4] },
+    bg_x: { label: "BG X", color: "#54e078", dash: [] },
+    bg_y: { label: "BG Y", color: "#54e078", dash: [7, 5] },
+    bg_z: { label: "BG Z", color: "#54e078", dash: [2, 4] }
+};
 
 function formatNumber(value, digits = 2) {
     if (value === null || value === undefined || value === "" || Number.isNaN(Number(value))) return "-";
@@ -103,71 +124,83 @@ function axisLabel(axis) {
     return String(axis || "-").replaceAll("_", " ").toUpperCase();
 }
 
-function colorFor(axis) {
-    return axis === "x" ? "#ff5b5b" : axis === "y" ? "#54e078" : "#3aa7ff";
-}
-
 function makeDemoRecords() {
     const records = [];
     for (let i = 0; i < 520; i += 1) {
         const distanceKm = i * 0.0025;
-        const pulse = Math.sin(i / 22) * 0.15;
-        let xG = 0.35 + Math.random() * 0.18 + pulse;
-        let yG = 0.28 + Math.random() * 0.16;
-        let zG = 0.22 + Math.random() * 0.12;
-        if ([34, 217, 242, 466, 482].includes(i)) xG += 7 + Math.random() * 5;
-        if ([86, 188, 410, 414].includes(i)) yG += 7 + Math.random() * 8;
-        if ([174, 280, 486, 500].includes(i)) zG += 3 + Math.random() * 5;
-        records.push({ distanceKm, xG, yG, zG, xAlert: xG > 8, yAlert: yG > 8, zAlert: zG > 5 });
+        const pulse = Math.sin(i / 25) * 0.12;
+        const axesG = {
+            al_x: 0.45 + Math.random() * 0.15 + pulse,
+            al_y: 0.32 + Math.random() * 0.10,
+            al_z: 0.28 + Math.random() * 0.10,
+            ar_x: 0.36 + Math.random() * 0.12,
+            ar_y: 0.30 + Math.random() * 0.12,
+            ar_z: 0.26 + Math.random() * 0.10,
+            bg_x: 0.20 + Math.random() * 0.08,
+            bg_y: 0.18 + Math.random() * 0.08,
+            bg_z: 0.16 + Math.random() * 0.08
+        };
+        if ([34, 217, 242, 466, 482].includes(i)) axesG.al_x = 102 + Math.random() * 14;
+        if ([86, 188, 410, 414].includes(i)) axesG.ar_y = 82 + Math.random() * 10;
+        if ([174, 280, 486, 500].includes(i)) axesG.bg_z = 62 + Math.random() * 9;
+        if ([120, 330].includes(i)) axesG.bg_x = 55 + Math.random() * 8;
+        const axesValid = Object.fromEntries(Object.keys(axesG).map(axisName => [axisName, true]));
+        const speedKmph = 88 + Math.sin(i / 40) * 4;
+        records.push({
+            recordIndex: i,
+            distanceKm,
+            positionMm: Math.round(distanceKm * 1000000),
+            masterCount: 100000 + i,
+            latitude: 12.9712 + distanceKm * 0.002,
+            longitude: 77.5912 + distanceKm * 0.002,
+            gpsValid: true,
+            validMask: 7,
+            speedKmph,
+            axesG,
+            axesValid
+        });
     }
     return {
-        threshold: { lateralG: 8, verticalG: 5, alertSpeedKmph: 80, demo: true },
+        threshold: { axisThresholdsG, alertSpeedKmph: 80, demo: true },
         records
     };
 }
 
-function buildChart(axis, title, thresholdG) {
-    const context = document.getElementById(`${axis}-chart`).getContext("2d");
-    charts[axis] = new Chart(context, {
+function axisValue(record, axisName) {
+    const axes = record.axesG || {};
+    if (Object.prototype.hasOwnProperty.call(axes, axisName)) return axes[axisName];
+    const fallback = axisName.endsWith("_x") ? record.xG : axisName.endsWith("_y") ? record.yG : record.zG;
+    return fallback ?? null;
+}
+
+function recordPoint(record, axisName) {
+    const validMap = record.axesValid || {};
+    if (Object.prototype.hasOwnProperty.call(validMap, axisName) && !validMap[axisName]) {
+        return { x: Number(record.distanceKm), y: null };
+    }
+    const value = axisValue(record, axisName);
+    if (value === null || value === undefined || Number.isNaN(Number(value))) {
+        return { x: Number(record.distanceKm), y: null };
+    }
+    return { x: Number(record.distanceKm), y: Number(value) };
+}
+
+function buildChart(component) {
+    const context = document.getElementById(`${component}-chart`).getContext("2d");
+    charts[component] = new Chart(context, {
         type: "line",
         data: {
-            labels: [],
-            datasets: [
-                {
-                    label: `${axis.toUpperCase()} RMS g`,
-                    data: [],
-                    borderColor: colorFor(axis),
-                    backgroundColor: colorFor(axis),
-                    borderWidth: 1.8,
-                    pointRadius: 0,
-                    tension: 0.1
-                },
-                {
-                    type: "scatter",
-                    label: "Alert peak",
-                    data: [],
-                    borderColor: "#ff4a4a",
-                    backgroundColor: "#ff4a4a",
-                    pointRadius: 5,
-                    pointHoverRadius: 7
-                },
-                {
-                    label: "Threshold",
-                    data: [],
-                    borderColor: "#8b6b08",
-                    backgroundColor: "#8b6b08",
-                    borderDash: [6, 5],
-                    borderWidth: 1,
-                    pointRadius: 0
-                }
-            ]
+            datasets: []
         },
         options: {
             animation: false,
             maintainAspectRatio: false,
             responsive: true,
             plugins: {
-                legend: { display: false },
+                legend: {
+                    display: false,
+                    labels: { color: "#9ab9e7", boxWidth: 18, font: { size: 10 } }
+                },
                 title: { display: false }
             },
             scales: {
@@ -183,7 +216,15 @@ function buildChart(axis, title, thresholdG) {
                     title: { display: true, text: "RMS (g)", color: "#5f83b1" },
                     ticks: { color: "#5f83b1" },
                     grid: { color: "rgba(58, 83, 122, 0.2)" },
-                    suggestedMax: thresholdG * 1.25
+                    suggestedMax: 130
+                },
+                speed: {
+                    position: "right",
+                    beginAtZero: true,
+                    title: { display: true, text: "Speed (kmph)", color: "#838b98" },
+                    ticks: { color: "#838b98" },
+                    grid: { drawOnChartArea: false },
+                    suggestedMax: 160
                 }
             }
         }
@@ -191,28 +232,78 @@ function buildChart(axis, title, thresholdG) {
 }
 
 function initCharts() {
-    buildChart("x", "X Axis - RMS Acceleration", 8);
-    buildChart("y", "Y Axis - RMS Acceleration", 8);
-    buildChart("z", "Z Axis - RMS Acceleration", 5);
+    buildChart("x");
+    buildChart("y");
+    buildChart("z");
 }
 
-function updateChart(axis, records, thresholdG) {
-    const key = `${axis}G`;
-    const alertKey = `${axis}Alert`;
-    const points = records.map(record => ({
-        x: Number(record.distanceKm),
-        y: Number(record[key] || 0)
-    }));
-    const alerts = records
-        .filter(record => record[alertKey])
-        .map(record => ({ x: Number(record.distanceKm), y: Number(record[key] || 0) }));
+function updateChart(component, records) {
+    const axes = componentAxes[component];
+    const datasets = [];
+    const allPoints = [];
+    for (const axisName of axes) {
+        const style = axisStyles[axisName];
+        const points = records.map(record => recordPoint(record, axisName));
+        allPoints.push(...points.filter(point => point.y !== null));
+        datasets.push({
+            label: style.label,
+            data: points,
+            borderColor: style.color,
+            backgroundColor: style.color,
+            borderDash: style.dash,
+            borderWidth: 1.6,
+            pointRadius: 0,
+            spanGaps: false,
+            tension: 0.05
+        });
+        datasets.push({
+            label: `${style.label} threshold`,
+            data: records.map(record => ({ x: Number(record.distanceKm), y: axisThresholdsG[axisName] })),
+            borderColor: style.color,
+            backgroundColor: style.color,
+            borderDash: [5, 5],
+            borderWidth: 0.8,
+            pointRadius: 0,
+            spanGaps: false
+        });
+    }
 
-    charts[axis].data.datasets[0].data = points;
-    charts[axis].data.datasets[1].data = alerts;
-    charts[axis].data.datasets[2].data = records.map(record => ({ x: Number(record.distanceKm), y: thresholdG }));
-    charts[axis].options.scales.x.max = Math.max(1.3, ...points.map(point => point.x));
-    charts[axis].options.scales.y.suggestedMax = Math.max(thresholdG * 1.25, ...points.map(point => point.y)) + 1;
-    charts[axis].update();
+    const alertPoints = [];
+    for (const record of records) {
+        for (const axisName of axes) {
+            const value = axisValue(record, axisName);
+            if (value !== null && value !== undefined && Number(value) > axisThresholdsG[axisName]) {
+                alertPoints.push({ x: Number(record.distanceKm), y: Number(value) });
+            }
+        }
+    }
+    datasets.push({
+        type: "scatter",
+        label: "Alert",
+        data: alertPoints,
+        borderColor: "#ff4a4a",
+        backgroundColor: "#ff4a4a",
+        pointRadius: 4,
+        pointHoverRadius: 6
+    });
+    datasets.push({
+        label: "Speed",
+        yAxisID: "speed",
+        data: records.map(record => ({ x: Number(record.distanceKm), y: record.speedKmph ?? null })),
+        borderColor: "#9aa0aa",
+        backgroundColor: "#9aa0aa",
+        borderWidth: 1,
+        pointRadius: 0,
+        spanGaps: false
+    });
+
+    charts[component].data.datasets = datasets;
+    charts[component].options.scales.x.max = Math.max(1.3, ...allPoints.map(point => point.x));
+    charts[component].options.scales.y.suggestedMax = Math.max(
+        ...axes.map(axisName => axisThresholdsG[axisName] * 1.15),
+        ...allPoints.map(point => point.y)
+    ) + 5;
+    charts[component].update();
 }
 
 function normalizeCloudAlert(row) {
@@ -249,7 +340,6 @@ async function fetchRmsSeries() {
 }
 
 function alertsFromRmsSeries(series) {
-    const threshold = series.threshold || {};
     const records = series.records || [];
     const alertRows = [];
     for (const record of records) {
@@ -263,9 +353,18 @@ function alertsFromRmsSeries(series) {
             longitude: record.longitude || 77.5912,
             received: "generated from RMS"
         };
-        if (record.xAlert) alertRows.push({ ...base, id: `rms-${record.recordIndex}-x`, axis: "x", peakG: record.xG, thresholdG: threshold.lateralG || 80 });
-        if (record.yAlert) alertRows.push({ ...base, id: `rms-${record.recordIndex}-y`, axis: "y", peakG: record.yG, thresholdG: threshold.lateralG || 80 });
-        if (record.zAlert) alertRows.push({ ...base, id: `rms-${record.recordIndex}-z`, axis: "z", peakG: record.zG, thresholdG: threshold.verticalG || 50 });
+        for (const [axisName, thresholdG] of Object.entries(axisThresholdsG)) {
+            const peakG = axisValue(record, axisName);
+            if (peakG !== null && peakG !== undefined && Number(peakG) > thresholdG) {
+                alertRows.push({
+                    ...base,
+                    id: `rms-${record.recordIndex}-${axisName}`,
+                    axis: axisName,
+                    peakG,
+                    thresholdG
+                });
+            }
+        }
     }
     return alertRows.sort((a, b) => Number(b.peakG || 0) - Number(a.peakG || 0)).slice(0, 12);
 }
@@ -337,11 +436,10 @@ async function postGatewayAction(action) {
 
 async function loadMonitoring(forceNotification = false) {
     const [series, alerts] = await Promise.all([fetchRmsSeries(), fetchAlerts()]);
-    const threshold = series.threshold || {};
     const visibleAlerts = alerts.length ? alerts : alertsFromRmsSeries(series);
-    updateChart("x", series.records, threshold.lateralG || 80);
-    updateChart("y", series.records, threshold.lateralG || 80);
-    updateChart("z", series.records, threshold.verticalG || 50);
+    updateChart("x", series.records);
+    updateChart("y", series.records);
+    updateChart("z", series.records);
     renderTable(visibleAlerts);
     renderGatewayPanel(series, visibleAlerts);
     showLatestNotification(visibleAlerts, forceNotification);

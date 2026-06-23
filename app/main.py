@@ -50,15 +50,15 @@ RAW_TIME_DOMAIN_RETENTION_DAYS = 7
 SPATIAL_ALERT_RETENTION_DAYS = 30
 MAX_SUPPORTED_TRAIN_SYSTEMS = 100
 PEAK_AXIS_THRESHOLDS_MG = {
-    "al_x": 10000,
-    "al_y": 8000,
-    "al_z": 12000,
-    "ar_x": 10000,
-    "ar_y": 8000,
-    "ar_z": 12000,
-    "bg_x": 5000,
-    "bg_y": 4000,
-    "bg_z": 6000,
+    "al_x": 100000,
+    "al_y": 80000,
+    "al_z": 120000,
+    "ar_x": 100000,
+    "ar_y": 80000,
+    "ar_z": 120000,
+    "bg_x": 50000,
+    "bg_y": 40000,
+    "bg_z": 60000,
 }
 AXIS_ALERT_GROUPS = {
     "al_x": "LATERAL",
@@ -92,6 +92,11 @@ FIXED_RECORD_SIZES = {
 PEAK_AXIS_THRESHOLDS_G = {
     axis_name: threshold_mg / 1000
     for axis_name, threshold_mg in PEAK_AXIS_THRESHOLDS_MG.items()
+}
+RMS_NODE_VALID_BITS = {
+    "al": 0x01,
+    "ar": 0x02,
+    "bg": 0x04,
 }
 MONGODB_URL = os.getenv("MONGODB_URL", "")
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "uabams_cloud")
@@ -677,6 +682,16 @@ def parse_rms_records(file_path: Path):
             }
         )
     return records
+
+
+def rms_axis_valid(valid_mask: Optional[int], axis_name: str) -> bool:
+    if valid_mask is None:
+        return True
+    node_prefix = axis_name.split("_", 1)[0]
+    node_bit = RMS_NODE_VALID_BITS.get(node_prefix)
+    if node_bit is None:
+        return True
+    return bool(valid_mask & node_bit)
 
 
 def parse_peak_axis(raw: bytes, base: int):
@@ -1696,7 +1711,11 @@ def cloud_status():
 
 
 @app.put("/api/v1/archive")
-async def upload_session_archive(request: Request, filename: Optional[str] = None):
+async def upload_session_archive(
+    request: Request,
+    filename: Optional[str] = None,
+    x_archive_sha256: Optional[str] = Header(default=None, alias="X-Archive-SHA256"),
+):
     init_db()
 
     archive_name = extract_archive_filename(request, filename)
@@ -1712,6 +1731,57 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
         raise HTTPException(status_code=400, detail="Archive body is empty")
 
     checksum = hashlib.sha256(archive_bytes).hexdigest()
+    with engine.connect() as conn:
+        existing = conn.execute(
+            text("""
+                SELECT archive_id, validation_status, validation_errors
+                FROM archives
+                WHERE gateway_id = :gateway_id
+                  AND session_name = :session_name
+            """),
+            {
+                "gateway_id": filename_parts["gateway_id"],
+                "session_name": filename_parts["session_name"],
+            },
+        ).fetchone()
+        if existing:
+            conn.execute(
+                text("""
+                    INSERT INTO upload_attempts
+                    (
+                        archive_id,
+                        http_response_code,
+                        success
+                    )
+                    VALUES
+                    (
+                        :archive_id,
+                        200,
+                        TRUE
+                    )
+                """),
+                {"archive_id": existing.archive_id},
+            )
+            conn.commit()
+            return {
+                "status": "success",
+                "message": "Duplicate archive already received",
+                "archiveId": existing.archive_id,
+                "archiveName": archive_name,
+                "gatewayId": filename_parts["gateway_id"],
+                "trainId": filename_parts["train_id"],
+                "sessionName": filename_parts["session_name"],
+                "validationStatus": existing.validation_status,
+                "validationErrors": existing.validation_errors,
+                "duplicate": True,
+            }
+
+    if x_archive_sha256 and x_archive_sha256.strip().lower() != checksum:
+        raise HTTPException(
+            status_code=400,
+            detail="X-Archive-SHA256 header does not match uploaded archive body",
+        )
+
     archive_size = len(archive_bytes)
     storage_root = ARCHIVE_STORAGE_DIR / checksum
     extract_dir = storage_root / "extracted"
@@ -2148,7 +2218,7 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
                 VALUES
                 (
                     :archive_id,
-                    201,
+                    200,
                     TRUE
                 )
             """),
@@ -2156,7 +2226,7 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
         )
         conn.commit()
 
-    status_code = 201 if validation["validation_status"] != "quarantined" else 422
+    status_code = 200 if validation["validation_status"] != "quarantined" else 422
     mongo_archive_id = mirror_archive_to_mongo({
         "archiveId": archive_id,
         "sessionId": session_id,
@@ -2175,7 +2245,7 @@ async def upload_session_archive(request: Request, filename: Optional[str] = Non
         status_code=status_code,
         content={
             "mongoArchiveId": mongo_archive_id,
-            "status": "success" if status_code == 201 else "error",
+            "status": "success" if status_code == 200 else "error",
             "message": "Archive received",
             "archiveId": archive_id,
             "sessionId": session_id,
@@ -2728,13 +2798,24 @@ def get_rms_series(limit: int = 1200):
             text("""
                 SELECT
                     r.record_index,
+                    r.master_count,
                     r.position_mm,
                     r.latitude,
                     r.longitude,
                     r.gps_valid,
+                    r.valid_mask,
                     r.al_x_mg, r.al_y_mg, r.al_z_mg,
                     r.ar_x_mg, r.ar_y_mg, r.ar_z_mg,
                     r.bg_x_mg, r.bg_y_mg, r.bg_z_mg,
+                    (
+                        SELECT p.speed_kmph
+                        FROM peak_records p
+                        WHERE p.session_id = r.session_id
+                          AND r.position_mm >= p.window_start_mm
+                          AND r.position_mm <= p.window_end_mm
+                        ORDER BY p.record_index
+                        LIMIT 1
+                    ) AS speed_kmph,
                     s.gateway_id,
                     s.train_id,
                     s.session_name,
@@ -2761,32 +2842,67 @@ def get_rms_series(limit: int = 1200):
         "verticalG": float(threshold_row.vertical_threshold) if threshold_row else 50.0,
         "lateralG": float(threshold_row.lateral_threshold) if threshold_row else 80.0,
         "alertSpeedKmph": ALERT_SPEED_LIMIT_KMPH,
+        "axisThresholdsG": PEAK_AXIS_THRESHOLDS_G,
     }
 
     records = []
     for row in reversed(rows):
-        x_g = max(abs(row.al_x_mg or 0), abs(row.ar_x_mg or 0), abs(row.bg_x_mg or 0)) / 1000
-        y_g = max(abs(row.al_y_mg or 0), abs(row.ar_y_mg or 0), abs(row.bg_y_mg or 0)) / 1000
-        z_g = max(abs(row.al_z_mg or 0), abs(row.ar_z_mg or 0), abs(row.bg_z_mg or 0)) / 1000
+        axis_mg = {
+            "al_x": row.al_x_mg,
+            "al_y": row.al_y_mg,
+            "al_z": row.al_z_mg,
+            "ar_x": row.ar_x_mg,
+            "ar_y": row.ar_y_mg,
+            "ar_z": row.ar_z_mg,
+            "bg_x": row.bg_x_mg,
+            "bg_y": row.bg_y_mg,
+            "bg_z": row.bg_z_mg,
+        }
+        axes_g = {}
+        axes_valid = {}
+        for axis_name, value_mg in axis_mg.items():
+            valid = value_mg is not None and rms_axis_valid(row.valid_mask, axis_name)
+            axes_valid[axis_name] = valid
+            axes_g[axis_name] = round(float(value_mg) / 1000, 6) if valid else None
+        x_candidates = [abs(axes_g[name] or 0) for name in ("al_x", "ar_x", "bg_x")]
+        y_candidates = [abs(axes_g[name] or 0) for name in ("al_y", "ar_y", "bg_y")]
+        z_candidates = [abs(axes_g[name] or 0) for name in ("al_z", "ar_z", "bg_z")]
+        x_g = max(x_candidates)
+        y_g = max(y_candidates)
+        z_g = max(z_candidates)
         distance_km = (row.position_mm or row.record_index * 250) / 1_000_000
         records.append(
             {
                 "recordIndex": row.record_index,
+                "masterCount": row.master_count,
                 "distanceKm": round(distance_km, 6),
                 "positionMm": row.position_mm,
                 "latitude": row.latitude,
                 "longitude": row.longitude,
                 "gpsValid": row.gps_valid,
+                "validMask": row.valid_mask,
+                "speedKmph": float(row.speed_kmph) if row.speed_kmph is not None else None,
                 "gatewayId": row.gateway_id,
                 "trainId": row.train_id,
                 "sessionName": row.session_name,
                 "routeName": row.route_name,
+                "axesG": axes_g,
+                "axesValid": axes_valid,
                 "xG": round(x_g, 6),
                 "yG": round(y_g, 6),
                 "zG": round(z_g, 6),
-                "xAlert": x_g > threshold["lateralG"],
-                "yAlert": y_g > threshold["lateralG"],
-                "zAlert": z_g > threshold["verticalG"],
+                "xAlert": any(
+                    (axes_g[name] or 0) > PEAK_AXIS_THRESHOLDS_G[name]
+                    for name in ("al_x", "ar_x", "bg_x")
+                ),
+                "yAlert": any(
+                    (axes_g[name] or 0) > PEAK_AXIS_THRESHOLDS_G[name]
+                    for name in ("al_y", "ar_y", "bg_y")
+                ),
+                "zAlert": any(
+                    (axes_g[name] or 0) > PEAK_AXIS_THRESHOLDS_G[name]
+                    for name in ("al_z", "ar_z", "bg_z")
+                ),
             }
         )
 
@@ -2866,20 +2982,36 @@ def receive_cloud_alert_event(alert: CloudAlertEvent):
 
 @app.post("/api/v1/alert")
 async def receive_single_cloud_alert_event(request: Request):
+    header_gateway_id = request.headers.get("X-Gateway-Id")
+    header_train_id = request.headers.get("X-Train-Id")
+    if not header_gateway_id or not header_train_id:
+        raise HTTPException(
+            status_code=422,
+            detail="X-Gateway-Id and X-Train-Id headers are required for /api/v1/alert",
+        )
+
     try:
         payload = await request.json()
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON alert payload") from exc
 
+    body_gateway_id = payload.get("gatewayId")
+    body_train_id = payload.get("trainId")
+    if body_gateway_id and body_gateway_id != header_gateway_id:
+        raise HTTPException(status_code=422, detail="gatewayId body value does not match X-Gateway-Id")
+    if body_train_id and body_train_id != header_train_id:
+        raise HTTPException(status_code=422, detail="trainId body value does not match X-Train-Id")
+
     if "triggeredAxes" not in payload:
         peak_value_g = float(payload.get("peakValueG") or payload.get("peakG") or payload.get("peak") or 0)
-        threshold_g = float(payload.get("thresholdG") or payload.get("threshold") or 100)
         peak_axis = payload.get("peakAxis") or payload.get("axisName") or "AL_Z"
+        normalized_axis = str(peak_axis).lower()
+        threshold_g = float(payload.get("thresholdG") or payload.get("threshold") or axis_threshold_g(normalized_axis) or 100)
         latitude = float(payload.get("latitude") or payload.get("peakLat") or 0)
         longitude = float(payload.get("longitude") or payload.get("peakLon") or 0)
         payload = {
-            "gatewayId": payload.get("gatewayId") or "UNKNOWN_GATEWAY",
-            "trainId": payload.get("trainId") or "UNKNOWN_TRAIN",
+            "gatewayId": body_gateway_id or header_gateway_id,
+            "trainId": body_train_id or header_train_id,
             "sessionName": payload.get("sessionName") or "UNKNOWN_SESSION",
             "routeName": payload.get("routeName") or "DEFAULT",
             "windowStartMm": int(payload.get("windowStartMm") or 0),
@@ -2887,11 +3019,11 @@ async def receive_single_cloud_alert_event(request: Request):
             "speedKmph": float(payload.get("speedKmph") or 0),
             "triggeredAxes": [
                 {
-                    "axisName": str(peak_axis).lower(),
+                    "axisName": normalized_axis,
                     "alertType": "VERTICAL" if str(peak_axis).upper().endswith("Z") else "LATERAL",
                     "peakValueMg": int(round(peak_value_g * 1000)),
                     "thresholdMg": int(round(threshold_g * 1000)),
-                    "peakPositionMm": int(payload.get("masterCount") or payload.get("peakPositionMm") or payload.get("windowStartMm") or 0),
+                    "peakPositionMm": int(payload.get("peakPositionMm") or payload.get("windowStartMm") or 0),
                     "peakLat": latitude,
                     "peakLon": longitude,
                 }
