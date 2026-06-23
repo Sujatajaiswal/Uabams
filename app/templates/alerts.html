@@ -47,56 +47,18 @@
                 <span><i></i> ENC</span>
             </div>
 
-            <section class="gateway-card">
-                <h3>ADXL Node</h3>
-                <p>State: <strong id="adxl-state">RUNNING</strong></p>
-                <p>Uptime: <strong id="adxl-uptime">342 s</strong></p>
-                <p>Faults: <strong id="adxl-faults">0</strong></p>
-                <p>FW Version: <strong>0x40</strong></p>
-                <p>Cal Version: <strong>1</strong></p>
-            </section>
-
-            <section class="gateway-card">
-                <h3>Encoder Node</h3>
-                <p>State: <strong id="encoder-state">RUNNING</strong></p>
-                <p>Uptime: <strong id="encoder-uptime">393 s</strong></p>
-                <p>Faults: <strong id="encoder-faults">0</strong></p>
-                <p>FW Version: <strong>0x10</strong></p>
-                <p>Cal Version: <strong>1</strong></p>
+            <section class="gateway-card gateway-status-card">
+                <h3>Node Status</h3>
+                <p>ADXL: <strong id="adxl-state">RUNNING</strong></p>
+                <p>Encoder: <strong id="encoder-state">RUNNING</strong></p>
+                <p>Faults: <strong id="gateway-faults">0</strong></p>
             </section>
 
             <section class="gateway-card">
                 <h3>Gateway Actions</h3>
                 <button type="button" id="ping-nodes-button" class="blue-action">Ping Nodes</button>
                 <button type="button" id="reset-nodes-button" class="red-action">Reset Nodes</button>
-            </section>
-
-            <section class="gateway-card gateway-calibration">
-                <h3>Calibration Updates</h3>
-                <label>Target Node
-                    <select>
-                        <option>ADXL Node (0x01)</option>
-                        <option>Encoder Node (0x04)</option>
-                    </select>
-                </label>
-                <label>Version <input value="1"></label>
-                <label>Scale X (Q16) <input value="65536"></label>
-                <label>Scale Y (Q16) <input value="65536"></label>
-                <label>Scale Z (Q16) <input value="65536"></label>
-                <label>Offset X <input value="0"></label>
-                <label>Offset Y <input value="0"></label>
-                <label>Offset Z <input value="0"></label>
-                <button type="button" class="green-action">Send Calibration</button>
-            </section>
-
-            <section class="gateway-card">
-                <h3>Fault Log</h3>
-                <div id="fault-log" class="dark-log"></div>
-            </section>
-
-            <section class="gateway-card">
-                <h3>Gateway Activity Log</h3>
-                <div id="activity-log" class="dark-log"></div>
+                <p class="gateway-action-status" id="gateway-action-status">Ready</p>
             </section>
         </aside>
     </div>
@@ -354,17 +316,12 @@ function showLatestNotification(alerts, force = false) {
 }
 
 function renderGatewayPanel(series, alerts) {
-    const latest = series.records[series.records.length - 1] || {};
-    document.getElementById("activity-log").textContent =
-        `Latest session: ${latest.sessionName || "demo"}\nRoute: ${latest.routeName || "DEFAULT"}\nRecords loaded: ${series.records.length}\nCloud: Render`;
-    document.getElementById("fault-log").textContent =
-        alerts.length ? alerts.map(alert => buildAlertMessage(alert)).slice(0, 4).join("\n") : "No active fault alerts.";
+    document.getElementById("gateway-faults").textContent = alerts.length;
 }
 
 function appendGatewayLog(message) {
-    const activityLog = document.getElementById("activity-log");
-    const time = new Date().toLocaleTimeString();
-    activityLog.textContent = `${time} - ${message}\n${activityLog.textContent}`.trim();
+    const status = document.getElementById("gateway-action-status");
+    status.textContent = message;
 }
 
 async function postGatewayAction(action) {

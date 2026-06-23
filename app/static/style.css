@@ -623,10 +623,6 @@ canvas {
     color: #e7f0ff;
 }
 
-.gateway-calibration label:nth-of-type(n+5) {
-    display: none;
-}
-
 .gateway-card label {
     color: #6387b8;
     font-size: 10px;
@@ -659,20 +655,12 @@ canvas {
     background: #ff6464;
 }
 
-.green-action {
-    background: #5bd772;
-}
-
-.dark-log {
-    height: 42px;
-    border: 1px solid #1f304c;
-    background: #111827;
+.gateway-action-status {
+    display: block;
+    margin-top: 6px;
     color: #94b7e8;
     font-size: 10px;
-    line-height: 1.25;
-    overflow: auto;
-    padding: 5px;
-    white-space: pre-wrap;
+    line-height: 1.3;
 }
 
 .monitor-table-card {
